@@ -1,1 +1,27 @@
+# Создание переменных
+number_var = 10
+string_var = "Hello, World!"
+float_var = 20.5
 
+# Вывод переменных
+print("Выводим переменные:")
+print("Число:", number_var)
+print("Строка:", string_var)
+print("Вещественное число:", float_var)
+
+# Запрашиваем данные у пользователя и сохраняем в переменные
+user_number = input("Введите любое целое число: ")
+user_string = input("Введите любую строку: ")
+
+# Вывод данных пользователя
+print("Ваше число:", user_number)
+print("Ваша строка:", user_string)
+
+# Демонстрация работы функции id()
+print("ID переменной number_var:", id(number_var))
+number_var = 15
+print("ID переменной number_var после изменения:", id(number_var))
+
+print("ID переменной string_var:", id(string_var))
+string_var += " Это Python!"
+print("ID переменной string_var после изменения:", id(string_var))
