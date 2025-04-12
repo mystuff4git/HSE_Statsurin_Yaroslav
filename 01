@@ -22,6 +22,34 @@ print("ID переменной number_var:", id(number_var))
 number_var = 15
 print("ID переменной number_var после изменения:", id(number_var))
 
+#Задание 2 
 print("ID переменной string_var:", id(string_var))
 string_var += " Это Python!"
 print("ID переменной string_var после изменения:", id(string_var))
+
+user_seconds = input("Введите время в секундах: ")
+
+if user_seconds.isdigit():
+    user_seconds = int(user_seconds)
+    hours = user_seconds // 3600
+    minutes = (user_seconds % 3600) // 60
+    seconds = user_seconds % 60
+
+    print("Часы:", hours)
+    print("Минуты:", minutes)
+    print("Секунды:", seconds)
+else:
+    print("Ошибка: Введите числовое значение!")
+
+#Задание 3
+n = input("Введите число от 1 до 9: ")
+
+if n.isdigit() and 1 <= int(n) <= 9:
+    n1 = int(n)
+    n2 = int(n * 2)
+    n3 = int(n * 3)
+
+    result = n1 + n2 + n3
+    print(f"Результат суммы {n} + {n*2} + {n*3} = {result}")
+else:
+    print("Ошибка: Введите число от 1 до 9!")
