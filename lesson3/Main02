@@ -39,13 +39,9 @@ def generate_header(respondent_details):
     return header.strip()
 
 def generate_multiple_headers(respondents_list):
-    # Цикл по списку данных ответчиков
     for respondent_data in respondents_list:
-        # Вызов функции генерации для каждого словаря
         generated_header = generate_header(respondent_data)
-        # Печать результата
         print(generated_header)
-        # Печать разделителя
         print("\n" + "=" * 40 + "\n")
 
 respondent_data_1 = {
@@ -73,7 +69,7 @@ respondent_data_3 = {
 
 respondent_data_4 = {
     'respondent_name': 'Неизвестное ООО',
-    'case_number': 'X99-000/0000' # Несуществующий код суда
+    'case_number': 'ХХХ-000/0000'
 }
 
 print("\n--- Генерация одиночной шапки ---")
@@ -81,6 +77,5 @@ header1 = generate_header(respondent_data_1)
 print(header1)
 
 print("\n--- Генерация нескольких шапок ---")
-# Список из словарей с данными ответчиков
 list_of_respondents = [respondent_data_1, respondent_data_2, respondent_data_3, respondent_data_4]
 generate_multiple_headers(list_of_respondents)
