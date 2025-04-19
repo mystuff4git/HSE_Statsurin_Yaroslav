@@ -76,6 +76,8 @@ print("\n--- Генерация одиночной шапки ---")
 header1 = generate_header(respondent_data_1)
 print(header1)
 
+# Не был на семинаре из-за отпуска, потому может быть немного не так понял что нужно сделать :)
+
 print("\n--- Генерация нескольких шапок ---")
 list_of_respondents = [respondent_data_1, respondent_data_2, respondent_data_3, respondent_data_4]
 generate_multiple_headers(list_of_respondents)
