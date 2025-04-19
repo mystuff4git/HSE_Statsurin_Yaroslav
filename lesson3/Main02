@@ -1,0 +1,86 @@
+courts_data = {
+    "A40": {"name": "Арбитражный суд города Москвы", "address": "115225, г. Москва, ул. Б. Тульская, 17"},
+    "A41": {"name": "Арбитражный суд Московской области", "address": "107053, г. Москва, проспект Академика Сахарова, д. 18"},
+    "A56": {"name": "Арбитражный суд города Санкт-Петербурга и Ленинградской области", "address": "191015, г. Санкт-Петербург, Суворовский пр., д. 50-52"},
+}
+
+my_claimant_data = {
+    "name": "Сидоров Петр Алексеевич",
+    "inn": "123456789012",
+    "address": "101000, г. Москва, ул. Главная, д. 1, кв. 10"
+}
+
+def generate_header(respondent_details):
+    case_number = respondent_details.get('case_number', 'Б/Н')
+    court_code = case_number.split('-')[0]
+    court_info = courts_data.get(court_code)
+
+    if court_info:
+        court_name = court_info.get('name')
+        court_address = court_info.get('address')
+    else:
+        # Если суд не найден
+        court_name = f"Суд {court_code}?"
+        court_address = "Адрес?"
+    header = f"""
+В {court_name}
+Адрес: {court_address}
+
+Истец: {my_claimant_data.get('name', '')}
+ИНН {my_claimant_data.get('inn', '')}
+Адрес: {my_claimant_data.get('address', '')}
+
+Ответчик: {respondent_details.get('respondent_name', '')}
+ИНН {respondent_details.get('respondent_inn', '')} ОГРН {respondent_details.get('respondent_ogrn', '')}
+Адрес: {respondent_details.get('respondent_address', '')}
+
+Номер дела {case_number}
+"""
+    return header.strip()
+
+def generate_multiple_headers(respondents_list):
+    # Цикл по списку данных ответчиков
+    for respondent_data in respondents_list:
+        # Вызов функции генерации для каждого словаря
+        generated_header = generate_header(respondent_data)
+        # Печать результата
+        print(generated_header)
+        # Печать разделителя
+        print("\n" + "=" * 40 + "\n")
+
+respondent_data_1 = {
+    'respondent_name': 'ООО "Моя оборона"',
+    'respondent_inn': '7712345678',
+    'respondent_ogrn': '1107746123456',
+    'respondent_address': '123456, г. Москва, ул. Цветочная, д. 10',
+    'case_number': 'A40-98765/2024'
+}
+
+respondent_data_2 = {
+    'respondent_name': 'АО "Векторина"',
+    'respondent_inn': '7812345678',
+    'respondent_ogrn': '1027801234567',
+    'respondent_address': '190000, г. Санкт-Петербург, Невский пр., д. 50',
+    'case_number': 'A56-11223/2025'
+}
+
+respondent_data_3 = {
+    'respondent_name': 'ИП Петрова В.В.',
+    'respondent_inn': '501234567890',
+    'respondent_address': '140000, Московская обл., г. Люберцы, ул. Лесная, д. 5',
+    'case_number': 'A41-44556/2024'
+}
+
+respondent_data_4 = {
+    'respondent_name': 'Неизвестное ООО',
+    'case_number': 'X99-000/0000' # Несуществующий код суда
+}
+
+print("\n--- Генерация одиночной шапки ---")
+header1 = generate_header(respondent_data_1)
+print(header1)
+
+print("\n--- Генерация нескольких шапок ---")
+# Список из словарей с данными ответчиков
+list_of_respondents = [respondent_data_1, respondent_data_2, respondent_data_3, respondent_data_4]
+generate_multiple_headers(list_of_respondents)
