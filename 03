@@ -1,0 +1,23 @@
+def factorial(n):
+    if n == 0:
+        return 1
+    result = 1
+    for i in range(1, n + 1):
+        result = result * i
+    return result
+
+def find_max_of_three(numbers_tuple):
+    return max(numbers_tuple)
+
+def triangle_area(leg1, leg2):
+     return 0.5 * leg1 * leg2
+
+print("--- Математические функции ---")
+print(f"Факториал 5: {factorial(5)}")
+print("-" * 20)
+
+print(f"Максимум из (10, 5, 15): {find_max_of_three((10, 5, 15))}")
+print("-" * 20)
+
+print(f"Площадь треугольника (3, 4): {triangle_area(3, 4)}")
+print("-" * 20)
