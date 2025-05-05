@@ -1,19 +1,16 @@
 import json
 import csv
 import re
-import os # Импортируем модуль os для работы с путями к файлам
+import os 
 
-# --- Константы ---
+
 TRADERS_TXT_FILE = os.path.join(os.path.dirname(__file__), 'traders.txt')
 TRADERS_JSON_FILE = os.path.join(os.path.dirname(__file__), 'traders.json')
 TRADERS_CSV_FILE = os.path.join(os.path.dirname(__file__), 'traders.csv')
-# Замените на имя вашего файла с сообщениями ЕФРСБ (1k, 10k или 100k)
-# ВАЖНО: Убедитесь, что этот файл находится в той же папке, что и скрипт,
-# либо укажите полный путь к файлу.
-EFRSB_JSON_FILE = os.path.join(os.path.dirname(__file__), 'efrsb_messages_1000.json') # Пример для 1000 сообщений
+EFRSB_JSON_FILE = os.path.join(os.path.dirname(__file__), 'efrsb_messages_1000.json')
 EMAILS_JSON_FILE = os.path.join(os.path.dirname(__file__), 'emails.json')
 
-# --- Задача 1: Обработка информации об организациях ---
+
 
 def process_traders_data(txt_file, json_file, csv_file):
     """
@@ -22,10 +19,10 @@ def process_traders_data(txt_file, json_file, csv_file):
     """
     print(f"--- Начало Задачи 1: Обработка данных из {txt_file} и {json_file} ---")
 
-    # 1a. Получаем список ИНН из файла traders.txt
+  
     try:
         with open(txt_file, 'r', encoding='utf-8') as f:
-            # Используем set для уникальности и быстрого поиска
+           
             target_inns = {line.strip() for line in f if line.strip()}
         print(f"Успешно прочитано {len(target_inns)} уникальных ИНН из {txt_file}")
     except FileNotFoundError:
@@ -35,7 +32,7 @@ def process_traders_data(txt_file, json_file, csv_file):
         print(f"Ошибка при чтении файла {txt_file}: {e}")
         return
 
-    # 1b. Находим информацию об организациях в файле traders.json
+ 
     try:
         with open(json_file, 'r', encoding='utf-8') as f:
             traders_data = json.load(f)
@@ -50,10 +47,8 @@ def process_traders_data(txt_file, json_file, csv_file):
         print(f"Ошибка при чтении или парсинге файла {json_file}: {e}")
         return
 
-    # Создаем словарь для быстрого доступа к данным по ИНН
-    traders_dict = {trader.get('inn'): trader for trader in traders_data if trader.get('inn')}
 
-    # Собираем нужную информацию
+    traders_dict = {trader.get('inn'): trader for trader in traders_data if trader.get('inn')}
     results = []
     found_count = 0
     for inn in target_inns:
@@ -61,7 +56,7 @@ def process_traders_data(txt_file, json_file, csv_file):
         if trader_info:
             results.append({
                 'ИНН': inn,
-                'ОГРН': trader_info.get('ogrn', ''), # Используем .get для безопасности
+                'ОГРН': trader_info.get('ogrn', ''), 
                 'Адрес': trader_info.get('address', '')
             })
             found_count += 1
@@ -70,7 +65,6 @@ def process_traders_data(txt_file, json_file, csv_file):
 
     print(f"Найдена информация для {found_count} из {len(target_inns)} ИНН.")
 
-    # 1c. Сохраняем информацию в файл traders.csv
     if not results:
         print("Нет данных для записи в CSV файл.")
         print(f"--- Задача 1 Завершена (без сохранения CSV) ---")
@@ -78,9 +72,8 @@ def process_traders_data(txt_file, json_file, csv_file):
 
     try:
         with open(csv_file, 'w', newline='', encoding='utf-8') as f:
-            # Определяем заголовки на основе ключей первого словаря
             fieldnames = results[0].keys()
-            writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=';') # Используем ';' как разделитель
+            writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=';') 
 
             writer.writeheader()
             writer.writerows(results)
@@ -93,13 +86,8 @@ def process_traders_data(txt_file, json_file, csv_file):
     print(f"--- Задача 1 Завершена ---")
 
 
-# --- Задача 2: Поиск email-адресов в тексте ---
+#  Задача 2: Поиск email-адресов в тексте 
 
-# 2. Регулярное выражение для поиска email-адресов
-# Улучшенное выражение:
-# - Учитывает разные домены верхнего уровня (включая .рф и т.д., хотя кириллицу не ловит без флагов)
-# - Допускает цифры в доменном имени
-# - Обрабатывает знаки +, _, ., - в локальной части
 EMAIL_REGEX = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 
 def find_emails_in_text(text):
@@ -113,7 +101,7 @@ def find_emails_in_text(text):
         list: Список найденных email-адресов или пустой список.
     """
     if not isinstance(text, str):
-        return [] # Возвращаем пустой список, если на входе не строка
+        return [] 
     return EMAIL_REGEX.findall(text)
 
 def extract_emails_from_efrsb(efrsb_file, emails_output_file):
@@ -127,8 +115,6 @@ def extract_emails_from_efrsb(efrsb_file, emails_output_file):
 
     try:
         with open(efrsb_file, 'r', encoding='utf-8') as f:
-            # Пытаемся загрузить весь файл. Для очень больших файлов (>1Гб)
-            # может потребоваться потоковая обработка (например, с ijson)
             efrsb_data = json.load(f)
         print(f"Успешно загружено {len(efrsb_data)} сообщений из {efrsb_file}")
 
@@ -155,7 +141,6 @@ def extract_emails_from_efrsb(efrsb_file, emails_output_file):
     total_emails_found = 0
     processed_messages = 0
 
-    # Итерируемся по каждому сообщению в датасете
     for message in efrsb_data:
         publisher_inn = message.get('publisher_inn')
         if not publisher_inn:
@@ -164,30 +149,24 @@ def extract_emails_from_efrsb(efrsb_file, emails_output_file):
 
         found_emails_in_message = set()
 
-        # Ищем email во *всех* строковых значениях словаря сообщения
-        # Это включает msg_text, но также и другие поля, если они есть и содержат строки
         for key, value in message.items():
             if isinstance(value, str):
                 emails = find_emails_in_text(value)
                 if emails:
-                    found_emails_in_message.update(emails) # Добавляем найденные email в set
+                    found_emails_in_message.update(emails) 
 
-        # Если в сообщении найдены email-адреса, добавляем их в общий словарь
         if found_emails_in_message:
-            # Используем setdefault для создания set(), если ИНН встречается впервые
             emails_by_inn.setdefault(publisher_inn, set()).update(found_emails_in_message)
             total_emails_found += len(found_emails_in_message)
 
         processed_messages += 1
-        if processed_messages % 100 == 0: # Логируем прогресс каждые 100 сообщений
+        if processed_messages % 100 == 0: 
              print(f"Обработано {processed_messages}/{len(efrsb_data)} сообщений...")
 
 
     print(f"Обработка сообщений завершена. Найдено всего {total_emails_found} email-адресов.")
     print(f"Уникальных ИНН с найденными email: {len(emails_by_inn)}")
 
-    # Сохраняем результат в emails.json
-    # Преобразуем set в list перед сохранением в JSON, т.к. JSON не поддерживает set
     emails_by_inn_serializable = {inn: list(email_set) for inn, email_set in emails_by_inn.items()}
 
     try:
@@ -201,10 +180,7 @@ def extract_emails_from_efrsb(efrsb_file, emails_output_file):
 
     print(f"--- Задача 2 Завершена ---")
 
-
-# --- Основной блок выполнения ---
 if __name__ == "__main__":
-    # Проверяем наличие входных файлов для Задачи 1
     if not os.path.exists(TRADERS_TXT_FILE):
          print(f"Не найден обязательный файл: {TRADERS_TXT_FILE}")
     elif not os.path.exists(TRADERS_JSON_FILE):
