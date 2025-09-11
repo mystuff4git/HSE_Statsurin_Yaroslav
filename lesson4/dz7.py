@@ -7,17 +7,17 @@ class CourtCase:
     def __init__(self, case_number: str):
         """
         Конструктор экземпляра класса.
-        :param case_number: строка с номером дела (обязательный параметр). [cite: 6]
+        :param case_number: строка с номером дела (обязательный параметр).
         """
         self.case_number = case_number
-        self.case_participants = []  # Список по умолчанию пустой [cite: 7]
-        self.listening_datetimes = []  # Список по умолчанию пустой [cite: 8]
-        self.is_finished = False  # Значение по умолчанию False [cite: 9]
-        self.verdict = ""  # Строка по умолчанию пустая [cite: 10]
+        self.case_participants = []  # Список по умолчанию пустой
+        self.listening_datetimes = []  # Список по умолчанию пустой
+        self.is_finished = False  # Значение по умолчанию False
+        self.verdict = ""  # Строка по умолчанию пустая
 
     def set_a_listening_datetime(self, datetime_info: dict):
         """
-        Добавляет в список listening_datetimes судебное заседание. [cite: 12]
+        Добавляет в список listening_datetimes судебное заседание.
         В качестве структуры используем словарь.
         :param datetime_info: Словарь с информацией о заседании,
                               например: {'date': '12.09.2025', 'time': '10:30', 'location': 'Зал №5'}
@@ -27,7 +27,7 @@ class CourtCase:
 
     def add_participant(self, participant_inn: str):
         """
-        Добавляет участника (его ИНН) в список case_participants. [cite: 13]
+        Добавляет участника (его ИНН) в список case_participants.
         :param participant_inn: ИНН участника в виде строки.
         """
         if participant_inn not in self.case_participants:
@@ -38,7 +38,7 @@ class CourtCase:
 
     def remove_participant(self, participant_inn: str):
         """
-        Убирает участника из списка case_participants. [cite: 14]
+        Убирает участника из списка case_participants.
         :param participant_inn: ИНН участника для удаления.
         """
         if participant_inn in self.case_participants:
@@ -49,7 +49,7 @@ class CourtCase:
 
     def make_a_decision(self, verdict_text: str):
         """
-        Выносит решение по делу: добавляет verdict и меняет is_finished на True. [cite: 15]
+        Выносит решение по делу: добавляет verdict и меняет is_finished на True.
         :param verdict_text: Текст решения.
         """
         self.verdict = verdict_text
