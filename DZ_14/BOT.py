@@ -83,7 +83,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 def main() -> None:
     """Основная функция для запуска бота."""
-    TOKEN = '8307944503:AAHs4-YdnUNox56ZPqwjC1raMD1zdcTMsCQ'
+    TOKEN = 'EDITED'
 
     # Создаем приложение
     application = Application.builder().token(TOKEN).build()
