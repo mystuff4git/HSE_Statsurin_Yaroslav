@@ -14,5 +14,5 @@ def fib_list(n):
     return result
 
 
-# --- Пример использования ---
+# Пример использования
 print(fib_list(10))
