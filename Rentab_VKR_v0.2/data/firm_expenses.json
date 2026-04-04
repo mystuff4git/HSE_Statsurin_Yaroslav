@@ -1,0 +1,29 @@
+{
+  "billable_hours_month": 120,
+  "overheads": [
+    {
+      "category": "Аренда офиса",
+      "amount_monthly": 50000
+    },
+    {
+      "category": "ПО и лицензии (1С, СПС «КонсультантПлюс»)",
+      "amount_monthly": 15000
+    },
+    {
+      "category": "Связь и интернет",
+      "amount_monthly": 5000
+    },
+    {
+      "category": "Административный персонал (ФОТ + взносы)",
+      "amount_monthly": 80000
+    },
+    {
+      "category": "Бухгалтерия (аутсорс)",
+      "amount_monthly": 10000
+    },
+    {
+      "category": "Прочие накладные расходы",
+      "amount_monthly": 10000
+    }
+  ]
+}
