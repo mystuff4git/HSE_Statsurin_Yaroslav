@@ -1,139 +1,526 @@
 """
-Rentab v0.2 — модуль налоговых режимов.
+Rentab v0.2 — модуль налоговых режимов РФ и РК.
 
-Содержит справочник TAX_REGIMES с параметрами всех поддерживаемых режимов
-для РФ и РК, а также вспомогательные функции для работы с юрисдикциями.
+Содержит:
+- Константные словари ставок (TAX_RATES_RF_2026, TAX_RATES_KZ_2026),
+  в которых собраны все ставки налогов, НДС и соцотчислений по состоянию
+  на 2026 год. Это единственное место для правки ставок при изменении
+  законодательства — логика ниже параметризуется через эти словари.
+- Пресеты режимов (REGIME_PRESETS) — готовые комбинации параметров
+  для селектора на странице 01_Setup.
+- Класс TaxCalculator — вычисляет налоговую нагрузку по переданному
+  набору параметров (revenue + params), а также (для РК) зарплатные
+  налоги и взносы через add_payroll_taxes().
 
-Ни одно числовое значение в этом файле не является хардкодным в логике —
-все ставки хранятся в словаре TAX_REGIMES и передаются в calculator.py.
+Налоговая база считается по принципу агентского договора:
+    taxable_base = gross_revenue − disbursements_billed
+Так пошлины (перевыставляемые клиенту «транзитом») не попадают
+в выручку фирмы и, соответственно, в базу налогообложения.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 
 # ---------------------------------------------------------------------------
-# Справочник налоговых режимов
+# Константы ставок — РФ, на 2026 г.
 # ---------------------------------------------------------------------------
-# Структура каждой записи:
-#   "country" : "RF" | "KZ"   — код страны
-#   "rate"    : float          — ставка налога (доли единицы, не проценты)
-#   "base"    : "revenue" | "profit"
-#                               — налоговая база:
-#                                  "revenue" — налог с оборота (с выручки)
-#                                  "profit"  — налог с прибыли (выручка − расходы)
-#   "label"   : str            — человекочитаемое название для UI
-
-TAX_REGIMES: dict[str, dict] = {
-    "УСН 6%": {
-        "country": "RF",
-        "rate": 0.06,
-        "base": "revenue",
-        "label": "УСН Доходы (6%)",
+TAX_RATES_RF_2026: dict[str, Any] = {
+    # УСН: ставка зависит от объекта налогообложения
+    "USN": {
+        "income": 0.06,                  # «Доходы»
+        "income_minus_expenses": 0.15,   # «Доходы минус расходы»
     },
-    "УСН 15%": {
-        "country": "RF",
-        "rate": 0.15,
-        "base": "profit",
-        "label": "УСН Доходы минус Расходы (15%)",
+    # НДС для плательщиков УСН (с 2026 г. при превышении порога выручки)
+    "USN_VAT": {
+        "none": 0.0,
+        "5%": 0.05,
+        "7%": 0.07,
     },
-    "ОСНО": {
-        "country": "RF",
-        "rate": 0.20,
-        "base": "revenue",
-        "label": "ОСНО — НДС (20%)",
+    # ОСНО
+    "OSNO": {
+        "profit": 0.25,   # налог на прибыль (ставка с 2025 г.)
+        "vat": 0.22,      # стандартная ставка НДС (с 2026 г.)
     },
-    "НПД": {
-        "country": "RF",
-        "rate": 0.06,
-        "base": "revenue",
-        "label": "НПД — Самозанятость (6%, клиент — юрлицо)",
+    # НПД (самозанятость)
+    "NPD": {
+        "individual": 0.04,     # с доходов от физлиц
+        "legal_entity": 0.06,   # с доходов от юрлиц и ИП
     },
-    "СНР 3%": {
-        "country": "KZ",
-        "rate": 0.03,
-        "base": "revenue",
-        "label": "Упрощённый СНР (3%)",
-    },
-    "ОУР": {
-        "country": "KZ",
-        "rate": 0.20,
-        "base": "profit",
-        "label": "Общеустановленный режим — КПН (20%)",
+    # Страховые взносы работодателя с ФОТ
+    "SOCIAL_CONTRIBUTIONS": {
+        "standard": 0.30,   # стандартный тариф
+        "zero": 0.0,        # для плательщиков АУСН
     },
 }
 
-# Символы валют по коду страны
-CURRENCIES: dict[str, str] = {
-    "RF": "₽",
-    "KZ": "₸",
+
+# ---------------------------------------------------------------------------
+# Константы ставок — РК, на 2026 г.
+# ---------------------------------------------------------------------------
+TAX_RATES_KZ_2026: dict[str, Any] = {
+    # Общеустановленный режим (ОУР) — единственный доступный для юруслуг
+    "CIT": 0.20,      # КПН (корпоративный подоходный налог) для ТОО
+    "IIT_IP": 0.10,   # ИПН для ИП с чистой прибыли
+    "VAT": {
+        "none": 0.0,
+        "16%": 0.16,
+    },
+    # Налоги и отчисления с зарплаты — удерживаются у работника
+    "PAYROLL_EMPLOYEE": {
+        "ОПВ":   0.10,   # обязательные пенсионные взносы
+        "ИПН":   0.10,   # индивидуальный подоходный налог
+        "ВОСМС": 0.02,   # взносы на ОСМС
+    },
+    # Платит работодатель сверх оклада
+    "PAYROLL_EMPLOYER": {
+        "ООСМС": 0.03,   # отчисления на ОСМС
+        "СО":    0.05,   # социальные отчисления
+        "ОПВР":  0.035,  # обязательные пенсионные взносы работодателя
+    },
 }
 
-# Полные названия стран
+
+# ---------------------------------------------------------------------------
+# Общие справочники
+# ---------------------------------------------------------------------------
 COUNTRY_NAMES: dict[str, str] = {
     "RF": "Российская Федерация",
     "KZ": "Республика Казахстан",
 }
 
+# Символ валюты для UI-отображения (метрики, подписи колонок).
+CURRENCY_SYMBOLS: dict[str, str] = {
+    "RF": "₽",
+    "KZ": "₸",
+}
 
-def get_regimes_by_country(country: str) -> dict[str, dict]:
-    """Возвращает все налоговые режимы для указанной страны.
-
-    Args:
-        country: Код страны — "RF" для России, "KZ" для Казахстана.
-
-    Returns:
-        Словарь {название_режима: параметры} только для данной страны.
-
-    Raises:
-        ValueError: Если передан неизвестный код страны.
-
-    Example:
-        >>> regimes = get_regimes_by_country("RF")
-        >>> list(regimes.keys())
-        ['УСН 6%', 'УСН 15%', 'ОСНО', 'НПД']
-    """
-    if country not in CURRENCIES:
-        raise ValueError(f"Неизвестный код страны: {country!r}. Допустимые: {list(CURRENCIES)}")
-    return {name: params for name, params in TAX_REGIMES.items() if params["country"] == country}
+# ISO-код валюты (используется в JSON-справочниках и Expense).
+CURRENCY_CODES: dict[str, str] = {
+    "RF": "RUB",
+    "KZ": "KZT",
+}
 
 
-def get_currency(country: str) -> str:
-    """Возвращает символ валюты для страны.
+# ---------------------------------------------------------------------------
+# Пресеты режимов — готовые конфигурации для селектора в UI
+# ---------------------------------------------------------------------------
+# Каждый пресет — словарь с ключами:
+#   "key"    : уникальный идентификатор пресета
+#   "label"  : человекочитаемое название для st.selectbox
+#   "params" : словарь параметров, принимаемый TaxCalculator.calculate_tax()
+
+REGIME_PRESETS: dict[str, list[dict]] = {
+    "RF": [
+        {
+            "key": "RF_USN_income",
+            "label": "УСН Доходы (6%)",
+            "params": {
+                "country": "RF",
+                "regime": "USN",
+                "object": "income",
+                "vat": "none",
+                "social_contributions": "standard",
+            },
+        },
+        {
+            "key": "RF_USN_income_expenses",
+            "label": "УСН Доходы − Расходы (15%)",
+            "params": {
+                "country": "RF",
+                "regime": "USN",
+                "object": "income_minus_expenses",
+                "vat": "none",
+                "social_contributions": "standard",
+            },
+        },
+        {
+            "key": "RF_OSNO",
+            "label": "ОСНО — прибыль 25% + НДС 22%",
+            "params": {
+                "country": "RF",
+                "regime": "OSNO",
+                "social_contributions": "standard",
+            },
+        },
+        {
+            "key": "RF_NPD_legal",
+            "label": "НПД — самозанятость (6% с юрлиц)",
+            "params": {
+                "country": "RF",
+                "regime": "NPD",
+                "client_type": "legal_entity",
+            },
+        },
+        {
+            "key": "RF_NPD_individual",
+            "label": "НПД — самозанятость (4% с физлиц)",
+            "params": {
+                "country": "RF",
+                "regime": "NPD",
+                "client_type": "individual",
+            },
+        },
+    ],
+    "KZ": [
+        {
+            "key": "KZ_OUR_too",
+            "label": "ОУР — ТОО (КПН 20%)",
+            "params": {
+                "country": "KZ",
+                "regime": "OUR",
+                "form": "too",
+                "vat": "none",
+            },
+        },
+        {
+            "key": "KZ_OUR_too_vat",
+            "label": "ОУР — ТОО + НДС 16%",
+            "params": {
+                "country": "KZ",
+                "regime": "OUR",
+                "form": "too",
+                "vat": "16%",
+            },
+        },
+        {
+            "key": "KZ_OUR_ip",
+            "label": "ОУР — ИП (ИПН 10%)",
+            "params": {
+                "country": "KZ",
+                "regime": "OUR",
+                "form": "ip",
+                "vat": "none",
+            },
+        },
+    ],
+}
+
+
+def get_presets_by_country(country: str) -> list[dict]:
+    """Возвращает список пресетов налоговых режимов для страны.
 
     Args:
         country: Код страны — "RF" или "KZ".
 
     Returns:
-        Символ валюты: "₽" для РФ, "₸" для РК.
+        Список словарей-пресетов с ключами key/label/params.
 
     Raises:
-        ValueError: Если передан неизвестный код страны.
-
-    Example:
-        >>> get_currency("RF")
-        '₽'
+        ValueError: Если страна не поддерживается.
     """
-    if country not in CURRENCIES:
-        raise ValueError(f"Неизвестный код страны: {country!r}")
-    return CURRENCIES[country]
+    if country not in REGIME_PRESETS:
+        raise ValueError(f"Неизвестная страна: {country!r}. Допустимые: {list(REGIME_PRESETS)}")
+    return REGIME_PRESETS[country]
 
 
-def get_regime(name: str) -> dict:
-    """Возвращает параметры налогового режима по его названию.
+def get_preset(key: str) -> dict:
+    """Возвращает пресет по его уникальному ключу.
 
     Args:
-        name: Ключ из TAX_REGIMES, например "УСН 6%" или "СНР 3%".
+        key: Значение поля "key", например "RF_USN_income".
 
     Returns:
-        Словарь с полями country, rate, base, label.
+        Словарь пресета с ключами key/label/params.
 
     Raises:
-        KeyError: Если название режима не найдено в справочнике.
-
-    Example:
-        >>> get_regime("НПД")["rate"]
-        0.06
+        KeyError: Если пресет с таким ключом не найден.
     """
-    if name not in TAX_REGIMES:
-        raise KeyError(f"Налоговый режим {name!r} не найден. Доступные: {list(TAX_REGIMES)}")
-    return TAX_REGIMES[name]
+    for country_presets in REGIME_PRESETS.values():
+        for preset in country_presets:
+            if preset["key"] == key:
+                return preset
+    raise KeyError(f"Пресет с ключом {key!r} не найден")
+
+
+def get_currency_symbol(country: str) -> str:
+    """Возвращает символ валюты для UI (₽ / ₸)."""
+    if country not in CURRENCY_SYMBOLS:
+        raise ValueError(f"Неизвестная страна: {country!r}")
+    return CURRENCY_SYMBOLS[country]
+
+
+def get_currency_code(country: str) -> str:
+    """Возвращает ISO-код валюты (RUB / KZT)."""
+    if country not in CURRENCY_CODES:
+        raise ValueError(f"Неизвестная страна: {country!r}")
+    return CURRENCY_CODES[country]
+
+
+# ---------------------------------------------------------------------------
+# Налоговый калькулятор
+# ---------------------------------------------------------------------------
+class TaxCalculator:
+    """Калькулятор налоговой нагрузки по выбранному режиму.
+
+    Режим задаётся словарём params (структура см. REGIME_PRESETS).
+    Все числовые ставки берутся из TAX_RATES_RF_2026 / TAX_RATES_KZ_2026 —
+    никаких хардкодных значений в логике.
+
+    Типовой сценарий:
+        >>> preset = get_preset("RF_USN_income")
+        >>> calc = TaxCalculator(preset["params"])
+        >>> result = calc.calculate_tax(revenue=250_000, params={
+        ...     **preset["params"],
+        ...     "expenses": 80_000,
+        ...     "disbursements_billed": 50_000,
+        ... })
+        >>> result["total_tax"]
+        12000.0
+    """
+
+    def __init__(self, params: dict):
+        """Сохраняет параметры режима.
+
+        Args:
+            params: Словарь вида {"country": "RF"|"KZ", "regime": "...",
+                    ...}, как в REGIME_PRESETS[...]["params"].
+
+        Raises:
+            ValueError: Если страна не поддерживается.
+        """
+        if "country" not in params or "regime" not in params:
+            raise ValueError("params должен содержать 'country' и 'regime'")
+        if params["country"] not in COUNTRY_NAMES:
+            raise ValueError(f"Неизвестная страна: {params['country']!r}")
+        self.params = dict(params)
+
+    # -- публичный API ------------------------------------------------------
+
+    def calculate_tax(self, revenue: float, params: dict | None = None) -> dict:
+        """Рассчитывает налоги по заданному режиму.
+
+        Args:
+            revenue: Общая сумма, полученная от клиента (услуги + пошлины).
+                     При агентской схеме пошлины исключаются из базы через
+                     params["disbursements_billed"].
+            params: Словарь параметров режима. Если None — используется
+                    self.params. Поддерживаемые ключи (помимо country/regime):
+                    - "expenses"             : float, подтверждённые расходы
+                                               (используются в базах "profit")
+                    - "disbursements_billed" : float, перевыставленные клиенту
+                                               пошлины (вычитаются из базы)
+                    Специфичные ключи:
+                    - RF/USN:   "object" ∈ {"income","income_minus_expenses"},
+                                "vat" ∈ {"none","5%","7%"}
+                    - RF/OSNO:  (НДС и прибыль фиксированные)
+                    - RF/NPD:   "client_type" ∈ {"individual","legal_entity"}
+                    - KZ/OUR:   "form" ∈ {"too","ip"},
+                                "vat" ∈ {"none","16%"}
+
+        Returns:
+            Словарь со структурой:
+            {
+                "regime_label"        : str,     # подпись режима
+                "revenue"             : float,   # исходная выручка
+                "taxable_base"        : float,   # revenue − disbursements_billed
+                "income_tax_base"     : float,   # база налога на доход
+                "income_tax_rate"     : float,   # применённая ставка
+                "income_tax"          : float,   # налог на доход
+                "vat_rate"            : float,   # применённая ставка НДС
+                "vat"                 : float,   # сумма НДС
+                "total_tax"           : float,   # общий налог (доход + НДС)
+                "details"             : dict,    # произвольные детали по режиму
+            }
+        """
+        p = dict(self.params)
+        if params is not None:
+            p.update(params)
+
+        expenses = float(p.get("expenses", 0.0))
+        disb_billed = float(p.get("disbursements_billed", 0.0))
+        taxable_base = max(revenue - disb_billed, 0.0)
+
+        country = p["country"]
+        if country == "RF":
+            return self._calc_rf(p, taxable_base, expenses, revenue)
+        if country == "KZ":
+            return self._calc_kz(p, taxable_base, expenses, revenue)
+        raise ValueError(f"Неизвестная страна: {country!r}")
+
+    def add_payroll_taxes(self, gross_salary: float) -> dict:
+        """Рассчитывает зарплатные налоги и взносы (только для РК).
+
+        Метод раскладывает начисленную («грязную») зарплату на:
+        - суммы, удерживаемые у работника (ОПВ/ИПН/ВОСМС);
+        - суммы, уплачиваемые работодателем сверху (ООСМС/СО/ОПВР).
+
+        Используется при расчёте cost_rate сотрудника в Setup: полная
+        себестоимость часа = (зарплата + взносы работодателя) / часы.
+
+        Args:
+            gross_salary: Начисленная зарплата работника в тенге.
+
+        Returns:
+            Словарь:
+            {
+                "gross_salary"          : float,           # «грязная» зарплата
+                "employee"              : dict[str,float], # что удержали у работника
+                "employer"              : dict[str,float], # что платит работодатель
+                "employee_total"        : float,           # сумма удержаний
+                "employer_total"        : float,           # сумма взносов работодателя
+                "net_to_employee"       : float,           # «на руки»
+                "total_employer_cost"   : float,           # полная стоимость работника
+            }
+
+        Raises:
+            ValueError: Если режим не относится к РК.
+        """
+        if self.params["country"] != "KZ":
+            raise ValueError("add_payroll_taxes реализован только для РК")
+        if gross_salary < 0:
+            raise ValueError(f"gross_salary не может быть отрицательной: {gross_salary}")
+
+        emp_rates = TAX_RATES_KZ_2026["PAYROLL_EMPLOYEE"]
+        er_rates = TAX_RATES_KZ_2026["PAYROLL_EMPLOYER"]
+
+        employee = {name: gross_salary * rate for name, rate in emp_rates.items()}
+        employer = {name: gross_salary * rate for name, rate in er_rates.items()}
+        emp_total = sum(employee.values())
+        er_total = sum(employer.values())
+
+        return {
+            "gross_salary": gross_salary,
+            "employee": employee,
+            "employer": employer,
+            "employee_total": emp_total,
+            "employer_total": er_total,
+            "net_to_employee": gross_salary - emp_total,
+            "total_employer_cost": gross_salary + er_total,
+        }
+
+    # -- внутренние расчёты -------------------------------------------------
+
+    def _calc_rf(
+        self,
+        p: dict,
+        taxable_base: float,
+        expenses: float,
+        revenue: float,
+    ) -> dict:
+        """Расчёт налогов для РФ. Не вызывать напрямую."""
+        rates = TAX_RATES_RF_2026
+        regime = p["regime"]
+
+        if regime == "USN":
+            obj = p.get("object", "income")
+            if obj not in rates["USN"]:
+                raise ValueError(f"Неизвестный объект УСН: {obj!r}")
+            income_rate = rates["USN"][obj]
+
+            if obj == "income":
+                income_tax_base = taxable_base
+            else:
+                income_tax_base = max(taxable_base - expenses, 0.0)
+
+            income_tax = income_tax_base * income_rate
+
+            vat_choice = p.get("vat", "none")
+            if vat_choice not in rates["USN_VAT"]:
+                raise ValueError(f"Неизвестная ставка НДС УСН: {vat_choice!r}")
+            vat_rate = rates["USN_VAT"][vat_choice]
+            vat = taxable_base * vat_rate
+
+            label = f"УСН {obj} ({income_rate * 100:.0f}%)"
+
+        elif regime == "OSNO":
+            income_rate = rates["OSNO"]["profit"]
+            profit = max(taxable_base - expenses, 0.0)
+            income_tax_base = profit
+            income_tax = profit * income_rate
+
+            vat_rate = rates["OSNO"]["vat"]
+            vat = taxable_base * vat_rate
+
+            label = f"ОСНО (прибыль {income_rate * 100:.0f}% + НДС {vat_rate * 100:.0f}%)"
+
+        elif regime == "NPD":
+            client_type = p.get("client_type", "legal_entity")
+            if client_type not in rates["NPD"]:
+                raise ValueError(f"Неизвестный тип клиента для НПД: {client_type!r}")
+            income_rate = rates["NPD"][client_type]
+
+            income_tax_base = taxable_base
+            income_tax = taxable_base * income_rate
+            vat_rate = 0.0
+            vat = 0.0
+
+            label = f"НПД ({income_rate * 100:.0f}%)"
+
+        else:
+            raise ValueError(f"Неизвестный режим РФ: {regime!r}")
+
+        return {
+            "regime_label": label,
+            "revenue": revenue,
+            "taxable_base": taxable_base,
+            "income_tax_base": income_tax_base,
+            "income_tax_rate": income_rate,
+            "income_tax": income_tax,
+            "vat_rate": vat_rate,
+            "vat": vat,
+            "total_tax": income_tax + vat,
+            "details": {
+                "regime": regime,
+                "object": p.get("object"),
+                "client_type": p.get("client_type"),
+                "vat_choice": p.get("vat"),
+            },
+        }
+
+    def _calc_kz(
+        self,
+        p: dict,
+        taxable_base: float,
+        expenses: float,
+        revenue: float,
+    ) -> dict:
+        """Расчёт налогов для РК. Не вызывать напрямую."""
+        rates = TAX_RATES_KZ_2026
+        regime = p["regime"]
+        if regime != "OUR":
+            raise ValueError(
+                f"Для РК юридические услуги поддерживают только ОУР, получено: {regime!r}"
+            )
+
+        form = p.get("form", "too")
+        profit = max(taxable_base - expenses, 0.0)
+
+        if form == "too":
+            income_rate = rates["CIT"]
+            label_form = "ТОО (КПН)"
+        elif form == "ip":
+            income_rate = rates["IIT_IP"]
+            label_form = "ИП (ИПН)"
+        else:
+            raise ValueError(f"Неизвестная форма организации в РК: {form!r}")
+
+        income_tax = profit * income_rate
+
+        vat_choice = p.get("vat", "none")
+        if vat_choice not in rates["VAT"]:
+            raise ValueError(f"Неизвестная ставка НДС РК: {vat_choice!r}")
+        vat_rate = rates["VAT"][vat_choice]
+        vat = taxable_base * vat_rate
+
+        label = f"ОУР — {label_form} {income_rate * 100:.0f}%"
+        if vat_rate > 0:
+            label += f" + НДС {vat_rate * 100:.0f}%"
+
+        return {
+            "regime_label": label,
+            "revenue": revenue,
+            "taxable_base": taxable_base,
+            "income_tax_base": profit,
+            "income_tax_rate": income_rate,
+            "income_tax": income_tax,
+            "vat_rate": vat_rate,
+            "vat": vat,
+            "total_tax": income_tax + vat,
+            "details": {
+                "regime": regime,
+                "form": form,
+                "vat_choice": vat_choice,
+            },
+        }

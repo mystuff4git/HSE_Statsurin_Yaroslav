@@ -1,67 +1,86 @@
-{
-  "version": "2024",
-  "source": "Казпатент, Приказ Министра юстиции РК о патентных пошлинах",
-  "currency": "KZT",
-  "duties": [
-    {
-      "code": "K-1.1",
-      "description": "Подача заявки на изобретение",
-      "amount": 11390
-    },
-    {
-      "code": "K-1.2",
-      "description": "Проведение экспертизы заявки на изобретение по существу",
-      "amount": 56950
-    },
-    {
-      "code": "K-1.3",
-      "description": "Выдача патента на изобретение",
-      "amount": 5695
-    },
-    {
-      "code": "K-2.1",
-      "description": "Подача заявки на полезную модель",
-      "amount": 5695
-    },
-    {
-      "code": "K-2.2",
-      "description": "Выдача патента на полезную модель",
-      "amount": 5695
-    },
-    {
-      "code": "K-3.1",
-      "description": "Подача заявки на промышленный образец",
-      "amount": 5695
-    },
-    {
-      "code": "K-3.2",
-      "description": "Выдача патента на промышленный образец",
-      "amount": 5695
-    },
-    {
-      "code": "K-4.1",
-      "description": "Подача заявки на товарный знак (1 класс МКТУ)",
-      "amount": 11390
-    },
-    {
-      "code": "K-4.2",
-      "description": "Экспертиза товарного знака по существу (1 класс МКТУ)",
-      "amount": 22781
-    },
-    {
-      "code": "K-4.3",
-      "description": "Регистрация товарного знака (1 класс МКТУ)",
-      "amount": 28476
-    },
-    {
-      "code": "K-5.1",
-      "description": "Регистрация договора об уступке прав на объект ИС",
-      "amount": 11390
-    },
-    {
-      "code": "K-5.2",
-      "description": "Регистрация лицензионного договора на объект ИС",
-      "amount": 11390
-    }
-  ]
-}
+[
+  {
+    "action": "Подача заявки на изобретение",
+    "amount": 0,
+    "currency": "KZT",
+    "category": "disbursement_billable",
+    "note": "# TODO: уточнить на сайте QazPatent"
+  },
+  {
+    "action": "Экспертиза заявки на изобретение по существу",
+    "amount": 0,
+    "currency": "KZT",
+    "category": "disbursement_billable",
+    "note": "# TODO: уточнить на сайте QazPatent"
+  },
+  {
+    "action": "Выдача патента на изобретение",
+    "amount": 0,
+    "currency": "KZT",
+    "category": "disbursement_billable",
+    "note": "# TODO: уточнить на сайте QazPatent"
+  },
+  {
+    "action": "Подача заявки на полезную модель",
+    "amount": 0,
+    "currency": "KZT",
+    "category": "disbursement_billable",
+    "note": "# TODO: уточнить на сайте QazPatent"
+  },
+  {
+    "action": "Выдача патента на полезную модель",
+    "amount": 0,
+    "currency": "KZT",
+    "category": "disbursement_billable",
+    "note": "# TODO: уточнить на сайте QazPatent"
+  },
+  {
+    "action": "Подача заявки на промышленный образец",
+    "amount": 0,
+    "currency": "KZT",
+    "category": "disbursement_billable",
+    "note": "# TODO: уточнить на сайте QazPatent"
+  },
+  {
+    "action": "Выдача патента на промышленный образец",
+    "amount": 0,
+    "currency": "KZT",
+    "category": "disbursement_billable",
+    "note": "# TODO: уточнить на сайте QazPatent"
+  },
+  {
+    "action": "Подача заявки на товарный знак (1 класс МКТУ)",
+    "amount": 0,
+    "currency": "KZT",
+    "category": "disbursement_billable",
+    "note": "# TODO: уточнить на сайте QazPatent"
+  },
+  {
+    "action": "Экспертиза товарного знака по существу (1 класс МКТУ)",
+    "amount": 0,
+    "currency": "KZT",
+    "category": "disbursement_billable",
+    "note": "# TODO: уточнить на сайте QazPatent"
+  },
+  {
+    "action": "Регистрация товарного знака и выдача свидетельства",
+    "amount": 0,
+    "currency": "KZT",
+    "category": "disbursement_billable",
+    "note": "# TODO: уточнить на сайте QazPatent"
+  },
+  {
+    "action": "Продление срока действия регистрации товарного знака",
+    "amount": 0,
+    "currency": "KZT",
+    "category": "disbursement_billable",
+    "note": "# TODO: уточнить на сайте QazPatent"
+  },
+  {
+    "action": "Регистрация договора об уступке / лицензии на объект ИС",
+    "amount": 0,
+    "currency": "KZT",
+    "category": "disbursement_billable",
+    "note": "# TODO: уточнить на сайте QazPatent"
+  }
+]

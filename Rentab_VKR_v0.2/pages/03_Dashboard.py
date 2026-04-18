@@ -143,7 +143,7 @@ summary_data = {
         "",
         f"{r['direct_labor']:,.0f}",
         f"{r['overheads_alloc']:,.0f}",
-        "0",
+        f"{r.get('disbursements_own', 0):,.0f}",
         f"{r['tax']:,.0f}",
         "",
         f"{r['nne']:,.0f}",

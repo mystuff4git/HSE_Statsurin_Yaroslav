@@ -2,12 +2,13 @@
 Rentab v0.2 — страница 02: Проект и смета.
 
 Позволяет:
-1. Задать название проекта и добавить этапы
-2. Назначить сотрудников на каждый этап с указанием часов
-3. Выбрать патентные пошлины из каталога (Роспатент / Казпатент)
-4. Просмотреть итоговую смету: Blended Rate, Leverage, NNE
+1. Задать название проекта и добавить этапы.
+2. Назначить сотрудников на каждый этап с указанием часов.
+3. Выбрать патентные пошлины из каталога (Роспатент / Казпатент).
+4. Просмотреть итоговую смету: Blended Rate, Leverage, NNE.
 
-Требует предварительной настройки на странице 01_Setup.
+Налоги считает TaxCalculator по параметрам выбранного на 01_Setup пресета.
+Накладные и пошлины — через ExpenseManager, сохранённый в session_state.
 """
 
 from pathlib import Path
@@ -15,14 +16,9 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from modules.calculator import (
-    blended_rate,
-    calculate_tax,
-    gross_revenue,
-    leverage,
-    nne,
-    tax_base,
-)
+from modules.calculator import blended_rate, leverage, nne
+from modules.expenses import ExpenseManager, Expense
+from modules.jurisdiction import TaxCalculator
 from modules.project import (
     ProjectStage,
     collect_project_data,
@@ -45,7 +41,7 @@ DUTIES_CATALOGS = {
 st.title("📋 Проект и смета")
 
 # ---------------------------------------------------------------------------
-# Проверяем, что Setup заполнен
+# Проверка: Setup заполнен
 # ---------------------------------------------------------------------------
 if "team" not in st.session_state or not st.session_state.get("team"):
     st.warning("Сначала заполните состав команды на странице **01 Setup**.")
@@ -54,8 +50,15 @@ if "team" not in st.session_state or not st.session_state.get("team"):
 team = st.session_state["team"]
 country = st.session_state.get("country", "RF")
 currency = st.session_state.get("currency", "₽")
-regime = st.session_state.get("regime", {"rate": 0.06, "base": "revenue"})
+regime_params = st.session_state.get(
+    "regime_params",
+    {"country": "RF", "regime": "USN", "object": "income", "vat": "none"},
+)
 overhead_rate_val = st.session_state.get("overhead_rate", 0.0)
+
+# ExpenseManager из Setup (для накладных). Если нет — создаём пустой:
+# расходы проекта добавим ниже, но накладные потеряются, что и ожидаемо.
+firm_manager: ExpenseManager = st.session_state.get("expense_manager") or ExpenseManager()
 
 # ---------------------------------------------------------------------------
 # Блок 1: Общие данные проекта
@@ -82,7 +85,6 @@ st.markdown("---")
 # ---------------------------------------------------------------------------
 st.subheader("2. Этапы проекта")
 
-# Инициализируем список этапов
 if "stage_names" not in st.session_state:
     st.session_state["stage_names"] = ["Анализ документов", "Подготовка заявки", "Сопровождение"]
 
@@ -95,7 +97,6 @@ with col_clear:
         if new_stage not in st.session_state["stage_names"]:
             st.session_state["stage_names"].append(new_stage)
 
-# Удаление этапов
 stages_to_remove = st.multiselect(
     "Удалить этапы",
     options=st.session_state["stage_names"],
@@ -115,11 +116,10 @@ st.subheader("3. Назначение исполнителей по этапам
 st.caption("Укажите количество часов для каждого сотрудника на каждом этапе.")
 
 stages: list[ProjectStage] = []
-member_names = [m["name"] for m in team]
 
 for stage_name in st.session_state["stage_names"]:
     with st.expander(f"Этап: {stage_name}", expanded=True):
-        hours_data = {}
+        hours_data: dict[str, float] = {}
         cols = st.columns(len(team))
         for col, member in zip(cols, team):
             with col:
@@ -132,11 +132,11 @@ for stage_name in st.session_state["stage_names"]:
                 )
                 hours_data[member["name"]] = h
 
-        assigned = []
-        for member in team:
-            h = hours_data.get(member["name"], 0.0)
-            if h > 0:
-                assigned.append({**member, "hours": h})
+        assigned = [
+            {**member, "hours": hours_data.get(member["name"], 0.0)}
+            for member in team
+            if hours_data.get(member["name"], 0.0) > 0
+        ]
 
         stage = ProjectStage(
             name=stage_name,
@@ -154,6 +154,7 @@ st.subheader("4. Патентные пошлины")
 
 duties_path = DUTIES_CATALOGS.get(country)
 selected_duties_amounts: list[float] = []
+selected_labels: list[str] = []
 
 if duties_path and duties_path.exists():
     duties_list = load_duties_catalog(duties_path)
@@ -166,7 +167,10 @@ if duties_path and duties_path.exists():
     selected_duties_amounts = [options[lbl] for lbl in selected_labels]
 
     if selected_duties_amounts:
-        st.info(f"Сумма пошлин: **{sum(selected_duties_amounts):,.0f} {currency}** (агентская схема — вне налоговой базы)")
+        st.info(
+            f"Сумма пошлин: **{sum(selected_duties_amounts):,.0f} {currency}** "
+            "(агентская схема — вне налоговой базы)"
+        )
 else:
     st.caption("Каталог пошлин для выбранной юрисдикции не найден.")
 
@@ -187,12 +191,39 @@ direct_labor = project_data["direct_labor"]
 total_hours = project_data["total_hours"]
 disbursements = project_data["disbursements_billed"]
 
+# Обновляем расходы проекта в менеджере (пошлины = billable disbursements)
+firm_manager.clear_project_expenses()
+currency_code = st.session_state.get("currency_code", "RUB")
+for label, amount in zip(selected_labels, selected_duties_amounts):
+    firm_manager.add_project_expense(
+        Expense(
+            name=label,
+            category="disbursement_billable",
+            amount=float(amount),
+            currency=currency_code,
+            period="one-time",
+            billable=True,
+        )
+    )
+
 br = blended_rate(team_hours)
 lev = leverage(team_hours)
 oh_alloc = overhead_rate_val * total_hours
-tb = tax_base(gr, disbursements)
-tax = calculate_tax(tb, direct_labor, regime)
-nne_val = nne(gr, direct_labor, oh_alloc, 0.0, tax)
+
+# Налог через TaxCalculator с учётом агентских пошлин и прямых расходов
+tax_calc = TaxCalculator(regime_params)
+tax_result = tax_calc.calculate_tax(
+    revenue=gr + disbursements,
+    params={
+        **regime_params,
+        "expenses": direct_labor + oh_alloc,
+        "disbursements_billed": disbursements,
+    },
+)
+tax = tax_result["total_tax"]
+disbursements_own = firm_manager.get_disbursements_own()
+
+nne_val = nne(gr, direct_labor, oh_alloc, disbursements_own, tax)
 total_client = gr + disbursements
 
 # ---------------------------------------------------------------------------
@@ -204,10 +235,16 @@ col1, col2, col3, col4 = st.columns(4)
 col1.metric(f"Итого для клиента, {currency}", f"{total_client:,.0f}")
 col2.metric(f"Blended Rate, {currency}/ч", f"{br:,.0f}")
 col3.metric("Leverage", f"{lev:.2f}")
-col4.metric(f"NNE, {currency}", f"{nne_val:,.0f}", delta=f"{(nne_val/gr*100):.1f}% маржа" if gr else None)
+col4.metric(
+    f"NNE, {currency}",
+    f"{nne_val:,.0f}",
+    delta=f"{(nne_val / gr * 100):.1f}% маржа" if gr else None,
+)
 
 with st.expander("Детальный расчёт"):
     st.markdown(f"""
+    **Режим:** {tax_result['regime_label']}
+
     **Выручка за услуги:** {gr:,.0f} {currency}
     **Пошлины (транзит):** {disbursements:,.0f} {currency}
     **Итого для клиента:** {total_client:,.0f} {currency}
@@ -215,14 +252,15 @@ with st.expander("Детальный расчёт"):
     ---
     **Прямые трудозатраты (Direct Labor):** {direct_labor:,.0f} {currency}
     **Накладные (Overheads alloc.):** {oh_alloc:,.0f} {currency}
-    **Налогооблагаемая база:** {tb:,.0f} {currency}
-    **Налог:** {tax:,.0f} {currency}
+    **Налогооблагаемая база:** {tax_result['taxable_base']:,.0f} {currency}
+    **Налог на доход:** {tax_result['income_tax']:,.0f} {currency}
+    **НДС:** {tax_result['vat']:,.0f} {currency}
+    **Итого налог:** {tax:,.0f} {currency}
 
     ---
-    **NNE = {gr:,.0f} − {direct_labor:,.0f} − {oh_alloc:,.0f} − 0 − {tax:,.0f} = {nne_val:,.0f} {currency}**
+    **NNE = {gr:,.0f} − {direct_labor:,.0f} − {oh_alloc:,.0f} − {disbursements_own:,.0f} − {tax:,.0f} = {nne_val:,.0f} {currency}**
     """)
 
-    # Таблица по сотрудникам
     rows = []
     for m in team_hours:
         rows.append({
@@ -241,7 +279,11 @@ st.session_state["project_result"] = {
     "direct_labor": direct_labor,
     "overheads_alloc": oh_alloc,
     "disbursements": disbursements,
+    "disbursements_own": disbursements_own,
     "tax": tax,
+    "income_tax": tax_result["income_tax"],
+    "vat": tax_result["vat"],
+    "regime_label": tax_result["regime_label"],
     "nne": nne_val,
     "blended_rate": br,
     "leverage": lev,
