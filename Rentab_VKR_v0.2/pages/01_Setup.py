@@ -2,9 +2,9 @@
 Rentab v0.2 — страница 01: Настройка среды.
 
 Позволяет пользователю задать:
-1. Юрисдикцию и налоговый режим
-2. Состав команды (billing rate / cost rate)
-3. Накладные расходы фирмы (с возможностью редактирования)
+1. Юрисдикцию и налоговый режим (пресет TaxCalculator).
+2. Состав команды (billing rate / cost rate).
+3. Накладные расходы фирмы (редактируемый шаблон из firm_expenses.json).
 
 Все данные сохраняются в st.session_state и доступны на остальных страницах.
 """
@@ -15,17 +15,17 @@ import streamlit as st
 
 from modules.jurisdiction import (
     COUNTRY_NAMES,
-    get_currency,
-    get_regime,
-    get_regimes_by_country,
+    get_currency_code,
+    get_currency_symbol,
+    get_preset,
+    get_presets_by_country,
 )
 from modules.team import ROLE_OPTIONS, default_team_df, team_from_editor
 from modules.expenses import (
-    df_to_expenses,
-    expenses_to_df,
-    load_firm_expenses,
-    overhead_rate_from_expenses,
-    total_overheads,
+    ExpenseManager,
+    df_to_overheads,
+    load_firm_overheads,
+    overheads_to_df,
 )
 
 # ---------------------------------------------------------------------------
@@ -41,7 +41,7 @@ st.title("⚙️ Настройка среды")
 st.markdown("Задайте юрисдикцию, налоговый режим, состав команды и накладные фирмы.")
 
 # ---------------------------------------------------------------------------
-# Блок 1: Юрисдикция
+# Блок 1: Юрисдикция и налоговый режим
 # ---------------------------------------------------------------------------
 st.subheader("1. Юрисдикция и налоговый режим")
 
@@ -54,28 +54,31 @@ with col_country:
         format_func=lambda c: COUNTRY_NAMES[c],
     )
 
-regimes = get_regimes_by_country(country)
-currency = get_currency(country)
+presets = get_presets_by_country(country)
+currency_symbol = get_currency_symbol(country)
+currency_code = get_currency_code(country)
 
 with col_regime:
-    regime_name = st.selectbox(
+    preset_key = st.selectbox(
         "Налоговый режим",
-        options=list(regimes.keys()),
-        format_func=lambda r: regimes[r]["label"],
+        options=[p["key"] for p in presets],
+        format_func=lambda k: next(p["label"] for p in presets if p["key"] == k),
     )
 
-regime = get_regime(regime_name)
+preset = get_preset(preset_key)
 
 st.info(
-    f"**{COUNTRY_NAMES[country]}** · {regime['label']} · Валюта: **{currency}**",
+    f"**{COUNTRY_NAMES[country]}** · {preset['label']} · Валюта: **{currency_symbol}**",
     icon="🏛️",
 )
 
 # Сохраняем в session_state
 st.session_state["country"] = country
-st.session_state["currency"] = currency
-st.session_state["regime_name"] = regime_name
-st.session_state["regime"] = regime
+st.session_state["currency"] = currency_symbol
+st.session_state["currency_code"] = currency_code
+st.session_state["regime_preset_key"] = preset_key
+st.session_state["regime_preset_label"] = preset["label"]
+st.session_state["regime_params"] = preset["params"]
 
 st.markdown("---")
 
@@ -89,7 +92,6 @@ st.caption(
     "Себестоимость (Cost) — ФОТ + соцотчисления."
 )
 
-# Инициализируем данные команды при первом открытии
 if "team_df" not in st.session_state:
     st.session_state["team_df"] = default_team_df()
 
@@ -104,12 +106,12 @@ team_df = st.data_editor(
             required=True,
         ),
         "Ставка (Billing)": st.column_config.NumberColumn(
-            f"Ставка, {currency}/ч",
+            f"Ставка, {currency_symbol}/ч",
             min_value=0.0,
             format="%.0f",
         ),
         "Себестоимость (Cost)": st.column_config.NumberColumn(
-            f"Себестоимость, {currency}/ч",
+            f"Себестоимость, {currency_symbol}/ч",
             min_value=0.0,
             format="%.0f",
         ),
@@ -128,62 +130,74 @@ if not team_df.empty:
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# Блок 3: Накладные расходы фирмы
+# Блок 3: Накладные расходы фирмы (Overheads)
 # ---------------------------------------------------------------------------
 st.subheader("3. Накладные расходы фирмы (Overheads)")
 st.caption(
     "Накладные аллоцируются на проект пропорционально часам. "
-    "Ставка накладных = сумма накладных / оплачиваемые часы в месяц."
+    "Ставка накладных = Σ(monthly overheads) / оплачиваемые часы в месяц."
 )
 
-# Загружаем базовый шаблон
-try:
-    base_expenses = load_firm_expenses(FIRM_EXPENSES_PATH)
-except FileNotFoundError:
-    base_expenses = {"billable_hours_month": 120, "overheads": []}
+# Загружаем шаблон Expense-ов из firm_expenses.json
+if "overheads_df" not in st.session_state:
+    try:
+        overheads_initial = load_firm_overheads(FIRM_EXPENSES_PATH)
+    except FileNotFoundError:
+        overheads_initial = []
+    st.session_state["overheads_df"] = overheads_to_df(overheads_initial)
 
-# Инициализируем данные накладных
-if "expenses_df" not in st.session_state:
-    st.session_state["expenses_df"] = expenses_to_df(base_expenses)
 if "billable_hours_month" not in st.session_state:
-    st.session_state["billable_hours_month"] = float(base_expenses["billable_hours_month"])
+    st.session_state["billable_hours_month"] = 120.0
 
 col_hours, _ = st.columns([1, 3])
 with col_hours:
     billable_hours = st.number_input(
         "Плановые оплачиваемые часы в месяц",
         min_value=1.0,
-        value=st.session_state["billable_hours_month"],
+        value=float(st.session_state["billable_hours_month"]),
         step=10.0,
     )
     st.session_state["billable_hours_month"] = billable_hours
 
-expenses_df = st.data_editor(
-    st.session_state["expenses_df"],
+overheads_df = st.data_editor(
+    st.session_state["overheads_df"],
     num_rows="dynamic",
     column_config={
         "Статья расходов": st.column_config.TextColumn("Статья расходов", required=True),
-        "Сумма в месяц": st.column_config.NumberColumn(
-            f"Сумма в месяц, {currency}",
+        "Сумма": st.column_config.NumberColumn(
+            f"Сумма, {currency_symbol}",
             min_value=0.0,
             format="%.0f",
+        ),
+        "Валюта": st.column_config.SelectboxColumn(
+            "Валюта",
+            options=["RUB", "KZT", "USD"],
+            required=True,
+        ),
+        "Период": st.column_config.SelectboxColumn(
+            "Период",
+            options=["monthly", "annual", "one-time"],
+            required=True,
         ),
     },
     hide_index=True,
     use_container_width=True,
-    key="expenses_editor",
+    key="overheads_editor",
 )
 
-st.session_state["expenses_df"] = expenses_df
+st.session_state["overheads_df"] = overheads_df
 
-# Рассчитываем накладные и сохраняем
-expenses_dict = df_to_expenses(expenses_df, billable_hours)
-oh_total = total_overheads(expenses_dict)
-oh_rate = overhead_rate_from_expenses(expenses_dict)
+# Собираем ExpenseManager и считаем ставку накладных
+manager = ExpenseManager()
+for expense in df_to_overheads(overheads_df):
+    manager.add_firm_overhead(expense)
 
-st.session_state["expenses"] = expenses_dict
+oh_total_monthly = manager.total_overheads_monthly()
+oh_rate = manager.calculate_overhead_rate(billable_hours)
+
+st.session_state["expense_manager"] = manager
 st.session_state["overhead_rate"] = oh_rate
 
 col_m1, col_m2 = st.columns(2)
-col_m1.metric(f"Накладные в месяц, {currency}", f"{oh_total:,.0f}")
-col_m2.metric(f"Ставка накладных, {currency}/ч", f"{oh_rate:,.1f}")
+col_m1.metric(f"Накладные в месяц, {currency_symbol}", f"{oh_total_monthly:,.0f}")
+col_m2.metric(f"Ставка накладных, {currency_symbol}/ч", f"{oh_rate:,.1f}")

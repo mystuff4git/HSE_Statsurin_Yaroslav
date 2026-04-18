@@ -1,145 +1,368 @@
 """
-Rentab v0.2 — модуль управления расходами фирмы.
+Rentab v0.2 — модуль управления расходами фирмы и проекта.
 
-Разделяет два типа расходов:
-1. Overheads (накладные фирмы) — косвенные расходы, аллоцируемые на проекты
-   через ставку overhead_rate (руб./час).
-2. Direct Disbursements — прямые расходы, связанные с конкретным проектом:
-   - Billable    : перевыставляются клиенту (патентные пошлины по агентской схеме)
-   - Non-billable: несёт фирма (командировки, нотариус, курьер)
+Расходы в IP-юридической практике делятся на несколько категорий, которые
+по-разному участвуют в финансовой модели:
 
-Данные о накладных хранятся в data/firm_expenses.json и загружаются
-через load_firm_expenses(). Это позволяет менять суммы без правки кода.
+- "overhead" (накладные фирмы): аренда, ПО, ассистент, бухгалтерия.
+  Относятся к фирме целиком и аллоцируются на проекты пропорционально
+  отработанным часам через overhead_rate = Σoverheads / billable_hours.
+
+- "disbursement_billable" (сквозные расходы, перевыставляемые клиенту):
+  пошлины Роспатента/Казпатента, пошлины WIPO, нотариус для клиента.
+  Платятся фирмой и возмещаются клиентом по агентской схеме — не являются
+  доходом, вычитаются из налоговой базы.
+
+- "disbursement_own" (собственные расходы проекта): командировки, курьер,
+  перевод документов — несёт фирма. Уменьшают NNE, но не попадают в счёт.
+
+- "project_extra" (прочее по проекту): любые нестандартные статьи,
+  которые пользователь решит учесть отдельно.
+
+Классы Expense и ExpenseManager инкапсулируют эту логику, чтобы страницы
+Streamlit оперировали объектами, а не сырыми словарями.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import ClassVar
 
 import pandas as pd
 
 
-def load_firm_expenses(path: str | Path) -> dict:
-    """Загружает шаблон накладных расходов фирмы из JSON-файла.
+# ---------------------------------------------------------------------------
+# Единичная статья расхода
+# ---------------------------------------------------------------------------
+@dataclass
+class Expense:
+    """Одна статья расхода — накладной фирмы или прямого расхода проекта.
+
+    Attributes:
+        name: Название статьи (например «Аренда офиса», «Госпошлина ТЗ»).
+        category: Одно из значений ALLOWED_CATEGORIES.
+        amount: Сумма расхода в указанной валюте.
+        currency: ISO-код валюты: "RUB" | "KZT" | "USD".
+        period: Для overhead — "monthly" | "annual"; для прямых расходов
+                проекта — обычно "one-time". Используется для приведения
+                к месячной сумме в total_overheads_monthly().
+        billable: Перевыставляется ли клиенту. Для overhead всегда False.
+                  Для disbursement_billable — True.
+    """
+
+    ALLOWED_CATEGORIES: ClassVar[frozenset[str]] = frozenset(
+        {"overhead", "disbursement_billable", "disbursement_own", "project_extra"}
+    )
+    ALLOWED_PERIODS: ClassVar[frozenset[str]] = frozenset({"monthly", "annual", "one-time"})
+    ALLOWED_CURRENCIES: ClassVar[frozenset[str]] = frozenset({"RUB", "KZT", "USD"})
+
+    name: str
+    category: str
+    amount: float = 0.0
+    currency: str = "RUB"
+    period: str = "one-time"
+    billable: bool = False
+
+    def __post_init__(self) -> None:
+        """Проверяет корректность полей при создании объекта."""
+        if self.category not in self.ALLOWED_CATEGORIES:
+            raise ValueError(
+                f"category={self.category!r}. Допустимые: {sorted(self.ALLOWED_CATEGORIES)}"
+            )
+        if self.period not in self.ALLOWED_PERIODS:
+            raise ValueError(
+                f"period={self.period!r}. Допустимые: {sorted(self.ALLOWED_PERIODS)}"
+            )
+        if self.currency not in self.ALLOWED_CURRENCIES:
+            raise ValueError(
+                f"currency={self.currency!r}. Допустимые: {sorted(self.ALLOWED_CURRENCIES)}"
+            )
+        if self.amount < 0:
+            raise ValueError(f"amount не может быть отрицательной: {self.amount}")
+
+    def to_dict(self) -> dict:
+        """Сериализует Expense в словарь для JSON / session_state."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Expense":
+        """Создаёт Expense из словаря (например, прочитанного из JSON).
+
+        Недостающие поля заполняются значениями по умолчанию.
+        """
+        return cls(
+            name=str(data["name"]),
+            category=str(data.get("category", "overhead")),
+            amount=float(data.get("amount", 0.0)),
+            currency=str(data.get("currency", "RUB")),
+            period=str(data.get("period", "one-time")),
+            billable=bool(data.get("billable", False)),
+        )
+
+    def monthly_amount(self) -> float:
+        """Приводит сумму к месячному объёму (для расчёта overhead_rate).
+
+        - monthly  → amount
+        - annual   → amount / 12
+        - one-time → 0.0 (разовые расходы не входят в ежемесячные накладные)
+        """
+        if self.period == "monthly":
+            return self.amount
+        if self.period == "annual":
+            return self.amount / 12.0
+        return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Менеджер расходов
+# ---------------------------------------------------------------------------
+class ExpenseManager:
+    """Менеджер расходов фирмы и проекта.
+
+    Хранит два независимых списка:
+    1. firm_overheads — накладные фирмы (ежемесячные расходы, которые
+       аллоцируются на проекты).
+    2. project_expenses — прямые расходы по конкретному проекту: пошлины,
+       командировки и прочее.
+
+    По умолчанию оба списка пусты: расходы проекта добавляются, только
+    если они реально есть в задаче.
+    """
+
+    def __init__(self) -> None:
+        """Создаёт пустой менеджер расходов."""
+        self._overheads: list[Expense] = []
+        self._project_expenses: list[Expense] = []
+
+    # -- накладные фирмы ----------------------------------------------------
+
+    def add_firm_overhead(self, expense: Expense) -> None:
+        """Добавляет статью накладных расходов фирмы.
+
+        Args:
+            expense: Expense с category="overhead".
+
+        Raises:
+            ValueError: Если category отличается от "overhead".
+        """
+        if expense.category != "overhead":
+            raise ValueError(
+                f"Ожидалась category='overhead', получено {expense.category!r}. "
+                "Для расходов проекта используйте add_project_expense()."
+            )
+        self._overheads.append(expense)
+
+    def clear_firm_overheads(self) -> None:
+        """Очищает список накладных (для повторной инициализации из UI)."""
+        self._overheads.clear()
+
+    @property
+    def firm_overheads(self) -> list[Expense]:
+        """Возвращает копию списка накладных фирмы."""
+        return list(self._overheads)
+
+    def total_overheads_monthly(self) -> float:
+        """Суммарные накладные за месяц (с учётом period каждой статьи).
+
+        Разовые расходы (period="one-time") в сумму не включаются —
+        они не являются регулярными накладными.
+        """
+        return sum(e.monthly_amount() for e in self._overheads)
+
+    def calculate_overhead_rate(self, billable_hours_per_month: float) -> float:
+        """Ставка накладных на час оплачиваемой работы.
+
+        Формула: total_overheads_monthly() / billable_hours_per_month.
+
+        Args:
+            billable_hours_per_month: Плановый объём оплачиваемых часов в месяц.
+
+        Returns:
+            Ставка (валюта/час). 0.0 при нулевых часах.
+        """
+        if billable_hours_per_month <= 0:
+            return 0.0
+        return self.total_overheads_monthly() / billable_hours_per_month
+
+    def get_overheads_allocated(self, direct_costs: float) -> float:
+        """Аллоцированные накладные в абсолютном выражении.
+
+        Поддерживается «прямая» аллокация: доля накладных, приходящаяся на
+        проект, трактуется как пропорция от прямых трудозатрат. Это упрощённый
+        вариант, полезный когда billable_hours_per_month ещё не задано.
+
+        Для основной модели (по часам) используйте calculate_overhead_rate()
+        и умножьте на фактические часы проекта.
+
+        Args:
+            direct_costs: Прямые трудозатраты по проекту.
+
+        Returns:
+            Сумма накладных, отнесённых на проект. Ставка-множитель берётся
+            как отношение месячных накладных к прямым затратам-базису —
+            поэтому при нулевом direct_costs возвращается 0.0.
+        """
+        if direct_costs <= 0:
+            return 0.0
+        monthly = self.total_overheads_monthly()
+        return monthly  # простое отнесение месячного объёма (как fallback)
+
+    # -- расходы проекта ----------------------------------------------------
+
+    def add_project_expense(self, expense: Expense) -> None:
+        """Добавляет прямой расход проекта (пошлина, командировка и т.п.).
+
+        Args:
+            expense: Expense с category из {"disbursement_billable",
+                     "disbursement_own", "project_extra"}.
+
+        Raises:
+            ValueError: Если передали expense с category="overhead".
+        """
+        if expense.category == "overhead":
+            raise ValueError(
+                "Для накладных фирмы используйте add_firm_overhead()."
+            )
+        self._project_expenses.append(expense)
+
+    def clear_project_expenses(self) -> None:
+        """Очищает список расходов проекта."""
+        self._project_expenses.clear()
+
+    @property
+    def project_expenses(self) -> list[Expense]:
+        """Возвращает копию списка расходов проекта."""
+        return list(self._project_expenses)
+
+    def get_disbursements_billed(self) -> float:
+        """Сумма перевыставляемых клиенту расходов (пошлины и т.п.).
+
+        Используется в tax_base: taxable_base = gross − disbursements_billed.
+        """
+        return sum(
+            e.amount for e in self._project_expenses
+            if e.category == "disbursement_billable"
+        )
+
+    def get_disbursements_own(self) -> float:
+        """Сумма собственных расходов фирмы по проекту.
+
+        Используется в NNE: вычитается из Gross.
+        """
+        return sum(
+            e.amount for e in self._project_expenses
+            if e.category == "disbursement_own"
+        )
+
+    def get_project_extras(self) -> float:
+        """Сумма прочих расходов проекта (category="project_extra")."""
+        return sum(
+            e.amount for e in self._project_expenses
+            if e.category == "project_extra"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Загрузка JSON-шаблонов и конверсия в DataFrame для Streamlit
+# ---------------------------------------------------------------------------
+def load_firm_overheads(path: str | Path) -> list[Expense]:
+    """Загружает шаблон накладных фирмы из data/firm_expenses.json.
 
     Ожидаемая структура файла:
-    {
-        "billable_hours_month": 120,
-        "overheads": [
-            {"category": "Аренда офиса", "amount_monthly": 50000},
+        [
+            {"name": "Аренда офиса", "category": "overhead", "amount": 0,
+             "currency": "RUB", "period": "monthly", "billable": false},
             ...
         ]
-    }
 
     Args:
-        path: Путь к файлу firm_expenses.json.
+        path: Путь к firm_expenses.json.
 
     Returns:
-        Словарь с ключами "billable_hours_month" и "overheads".
+        Список Expense с category="overhead".
 
     Raises:
-        FileNotFoundError: Если файл не найден по указанному пути.
-        ValueError: Если структура файла не соответствует ожидаемой.
-
-    Example:
-        >>> data = load_firm_expenses("data/firm_expenses.json")
-        >>> data["billable_hours_month"]
-        120
+        FileNotFoundError: Если файл не найден.
     """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Файл накладных не найден: {path}")
+    with path.open(encoding="utf-8") as f:
+        data = json.load(f)
+    return [Expense.from_dict(item) for item in data]
 
+
+def load_duties_as_expenses(path: str | Path) -> list[Expense]:
+    """Загружает каталог пошлин (Роспатент / Казпатент) как список Expense.
+
+    Каждая пошлина становится Expense с category="disbursement_billable",
+    period="one-time", billable=True.
+
+    Ожидаемая структура JSON:
+        [
+            {"action": "...", "amount": 0, "currency": "RUB",
+             "category": "disbursement_billable", "note": "# TODO: ..."},
+            ...
+        ]
+
+    Args:
+        path: Путь к rospatent_duties.json или qazpatent_duties.json.
+
+    Returns:
+        Список Expense.
+
+    Raises:
+        FileNotFoundError: Если файл не найден.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Каталог пошлин не найден: {path}")
     with path.open(encoding="utf-8") as f:
         data = json.load(f)
 
-    if "billable_hours_month" not in data or "overheads" not in data:
-        raise ValueError(
-            "firm_expenses.json должен содержать ключи 'billable_hours_month' и 'overheads'"
+    expenses: list[Expense] = []
+    for item in data:
+        expenses.append(
+            Expense(
+                name=str(item["action"]),
+                category=str(item.get("category", "disbursement_billable")),
+                amount=float(item.get("amount", 0.0)),
+                currency=str(item.get("currency", "RUB")),
+                period="one-time",
+                billable=True,
+            )
         )
-    return data
+    return expenses
 
 
-def total_overheads(expenses: dict) -> float:
-    """Считает суммарные накладные расходы фирмы в месяц.
-
-    Args:
-        expenses: Словарь из load_firm_expenses() с полем "overheads".
-
-    Returns:
-        Сумма всех накладных в месяц (валюта/мес).
-
-    Example:
-        >>> expenses = {
-        ...     "billable_hours_month": 120,
-        ...     "overheads": [
-        ...         {"category": "Аренда", "amount_monthly": 50000},
-        ...         {"category": "ПО",     "amount_monthly": 15000},
-        ...     ]
-        ... }
-        >>> total_overheads(expenses)
-        65000.0
-    """
-    return sum(float(item["amount_monthly"]) for item in expenses["overheads"])
-
-
-def overhead_rate_from_expenses(expenses: dict) -> float:
-    """Рассчитывает ставку накладных на час из данных firm_expenses.json.
-
-    Делегирует расчёт calculator.overhead_rate(), используя данные из файла.
-
-    Args:
-        expenses: Словарь из load_firm_expenses().
-
-    Returns:
-        Ставка накладных (валюта/час). 0.0 если billable_hours_month = 0.
-
-    Example:
-        >>> expenses = {
-        ...     "billable_hours_month": 160,
-        ...     "overheads": [{"category": "X", "amount_monthly": 160000}]
-        ... }
-        >>> overhead_rate_from_expenses(expenses)
-        1000.0
-    """
-    from modules.calculator import overhead_rate  # отложенный импорт во избежание циклов
-
-    oh_total = total_overheads(expenses)
-    hours = float(expenses.get("billable_hours_month", 0))
-    return overhead_rate(oh_total, hours)
-
-
-def expenses_to_df(expenses: dict) -> pd.DataFrame:
-    """Конвертирует список накладных в DataFrame для st.data_editor.
-
-    Args:
-        expenses: Словарь из load_firm_expenses() с полем "overheads".
-
-    Returns:
-        DataFrame со столбцами "Статья расходов" и "Сумма в месяц".
-    """
+def overheads_to_df(overheads: list[Expense]) -> pd.DataFrame:
+    """Готовит DataFrame для st.data_editor из списка накладных."""
     rows = [
-        {"Статья расходов": item["category"], "Сумма в месяц": float(item["amount_monthly"])}
-        for item in expenses["overheads"]
+        {
+            "Статья расходов": e.name,
+            "Сумма": e.amount,
+            "Валюта": e.currency,
+            "Период": e.period,
+        }
+        for e in overheads
     ]
     return pd.DataFrame(rows)
 
 
-def df_to_expenses(df: pd.DataFrame, billable_hours_month: float) -> dict:
-    """Конвертирует DataFrame из st.data_editor обратно в структуру expenses.
-
-    Используется для сохранения изменений, внесённых пользователем через UI.
-
-    Args:
-        df: DataFrame со столбцами "Статья расходов" и "Сумма в месяц".
-        billable_hours_month: Плановые оплачиваемые часы в месяц.
-
-    Returns:
-        Словарь, совместимый с форматом firm_expenses.json.
-    """
-    overheads = [
-        {"category": row["Статья расходов"], "amount_monthly": float(row["Сумма в месяц"])}
-        for _, row in df.iterrows()
-    ]
-    return {"billable_hours_month": billable_hours_month, "overheads": overheads}
+def df_to_overheads(df: pd.DataFrame) -> list[Expense]:
+    """Преобразует DataFrame из st.data_editor обратно в список Expense."""
+    out: list[Expense] = []
+    for _, row in df.iterrows():
+        out.append(
+            Expense(
+                name=str(row["Статья расходов"]),
+                category="overhead",
+                amount=float(row["Сумма"]),
+                currency=str(row.get("Валюта", "RUB")),
+                period=str(row.get("Период", "monthly")),
+                billable=False,
+            )
+        )
+    return out
