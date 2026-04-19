@@ -48,9 +48,10 @@ JURISDICTION_OPTIONS: dict[str, str] = {
 
 # Список режимов РФ (ключи) — для st.radio. Человекочитаемые подписи
 # собираем из TAX_RATES_RF_2026 динамически, без дублирования.
-RF_REGIME_KEYS: list[str] = ["USN", "OSNO", "NPD"]
+RF_REGIME_KEYS: list[str] = ["USN", "AUSN", "OSNO", "NPD"]
 RF_REGIME_LABELS: dict[str, str] = {
     "USN": "УСН",
+    "AUSN": "АУСН",
     "OSNO": "ОСНО",
     "NPD": "НПД (самозанятость)",
 }
@@ -135,6 +136,17 @@ with tab_jur:
                 vat=usn_vat,
                 social_contributions=usn_sc,
             )
+
+        elif rf_regime == "AUSN":
+            st.info(
+                "АУСН: налог 8% с дохода, страховые взносы 0%, НДС не применяется. "
+                "Доступен для компаний с доходом до 60 млн ₽/год и штатом до 5 чел.",
+                icon="ℹ️",
+            )
+            # Режим фиксированный — никаких дополнительных выборов.
+            # Для расчёта payroll автоматически выставляем нулевые взносы,
+            # чтобы add_payroll_taxes вернул 0 ₽ страховых отчислений.
+            rf_params["social_contributions"] = "zero"
 
         elif rf_regime == "OSNO":
             st.info(
@@ -241,7 +253,7 @@ with tab_team:
         col_bill, col_cost = st.columns(2)
         with col_bill:
             new_billing = st.number_input(
-                "Billing rate (ставка для клиента)",
+                "Ставка для клиента (₽ или ₸ / ч)",
                 min_value=0.0,
                 value=0.0,
                 step=500.0,
@@ -249,7 +261,7 @@ with tab_team:
             )
         with col_cost:
             new_cost = st.number_input(
-                "Cost rate (себестоимость часа)",
+                "Себестоимость часа (ФОТ + отчисления)",
                 min_value=0.0,
                 value=0.0,
                 step=500.0,
@@ -289,7 +301,7 @@ with tab_team:
 
         st.caption(
             f"Всего: {len(team_list)} сотрудников · "
-            "столбцы: Имя · Роль · Billing · Cost"
+            "столбцы: Имя · Роль · Ставка · Себестоимость"
         )
 
 
@@ -400,7 +412,7 @@ with tab_exp:
 
     col_m1, col_m2 = st.columns(2)
     col_m1.metric(f"Накладные в месяц, {sym}", f"{total_monthly:,.0f}")
-    col_m2.metric(f"Overhead Rate, {sym}/ч", f"{oh_rate:,.1f}")
+    col_m2.metric(f"Ставка накладных, {sym}/ч", f"{oh_rate:,.1f}")
 
     # Кладём посчитанную ставку в session_state — чтобы 02_Project не пересчитывал заново.
     st.session_state["overhead_rate"] = oh_rate

@@ -182,12 +182,13 @@ with st.form("add_stage_form", clear_on_submit=True):
 # --- отображение списка этапов ---
 stages_data: list[dict] = st.session_state["project_stages"]
 
+# Словарь-lookup по имени — используется и в отрисовке списка, и в сборке
+# team_with_hours ниже по странице.
+team_by_name: dict[str, dict] = {m["name"]: m for m in team}
+
 if not stages_data:
     st.info("Пока нет этапов. Добавьте первый этап через форму выше.")
 else:
-    # Собираем team-lookup по имени для подстановки ставок.
-    team_by_name: dict[str, dict] = {m["name"]: m for m in team}
-
     st.markdown("#### Состав этапов")
     for idx, stage in enumerate(list(stages_data)):
         executor = stage["executor"]
@@ -216,14 +217,16 @@ else:
 
 # --- реактивный пересчёт Blended Rate и Leverage ---
 # Собираем team_with_hours одним проходом: каждой строке этапа соответствует
-# член команды с «унаследованными» billing_rate/cost_rate/role.
+# член команды с «унаследованными» billing_rate/cost_rate/role. Имя этапа
+# пробрасываем дальше, чтобы дашборд мог построить детальную таблицу по этапам.
 team_with_hours: list[dict] = []
 for stage in stages_data:
-    member = next((m for m in team if m["name"] == stage["executor"]), None)
+    member = team_by_name.get(stage["executor"])
     if member is None:
         continue
     team_with_hours.append(
         {
+            "stage_name": stage["name"],
             "name": member["name"],
             "role": member["role"],
             "billing_rate": float(member["billing_rate"]),
@@ -237,9 +240,9 @@ lev_current = leverage(team_with_hours)
 hours_total = sum(m["hours"] for m in team_with_hours)
 
 col_m1, col_m2, col_m3 = st.columns(3)
-col_m1.metric(f"Blended Rate, {currency_symbol}/ч", f"{br_current:,.0f}")
+col_m1.metric(f"Средневзвешенная ставка, {currency_symbol}/ч", f"{br_current:,.0f}")
 col_m2.metric(
-    "Leverage",
+    "Коэффициент рычага",
     f"{lev_current:.2f}",
     help="Часы младших / часы старших. Выше — выше маржа.",
 )
@@ -500,6 +503,12 @@ if calc_clicked:
     )
 
     # --- 5. Сохраняем результат ---
+    # В results.project_expenses складываем все расходы проекта (пошлины +
+    # произвольные) в сериализованном виде — чтобы дашборд мог построить
+    # табличку «Расходы проекта» без повторного обхода session_state.
+    project_expenses_dump = [e.to_dict() for e in manager.project_expenses]
+    overhead_rate_val = manager.calculate_overhead_rate(billable_hours_month)
+
     results = {
         # идентификация проекта
         "project_name": project_name,
@@ -515,6 +524,7 @@ if calc_clicked:
         "blended_rate": br_current,
         "leverage": lev_current,
         "total_hours": total_hours_val,
+        "overhead_rate": overhead_rate_val,
         # финансы
         "gross_revenue": gr_val,
         "direct_labor": direct_labor_val,
@@ -527,8 +537,9 @@ if calc_clicked:
         "taxable_base": float(tax_result["taxable_base"]),
         "nne": nne_val,
         "total_client": gr_val + disbursements_billed,
-        # детализация команды для таблицы
+        # детализация для дашборда
         "team_with_hours": team_with_hours,
+        "project_expenses": project_expenses_dump,
     }
     st.session_state["results"] = results
     # Обратная совместимость: старый ключ также обновляем,
@@ -545,10 +556,10 @@ if results_current:
 
     sym = results_current["currency"]
     p1, p2, p3 = st.columns(3)
-    p1.metric(f"Gross Revenue, {sym}", f"{results_current['gross_revenue']:,.0f}")
-    p2.metric(f"Tax, {sym}", f"{results_current['tax']:,.0f}")
+    p1.metric(f"Выручка, {sym}", f"{results_current['gross_revenue']:,.0f}")
+    p2.metric(f"Налог, {sym}", f"{results_current['tax']:,.0f}")
     p3.metric(
-        f"NNE, {sym}",
+        f"Чистая прибыль (NNE), {sym}",
         f"{results_current['nne']:,.0f}",
         delta=(
             f"{(results_current['nne'] / results_current['gross_revenue'] * 100):.1f}%"
@@ -579,8 +590,8 @@ if results_current:
                     "Сотрудник": m["name"],
                     "Роль": m["role"],
                     "Часы": m["hours"],
-                    f"Billing, {sym}": m["billing_rate"] * m["hours"],
-                    f"Cost, {sym}": m["cost_rate"] * m["hours"],
+                    f"Выручка, {sym}": m["billing_rate"] * m["hours"],
+                    f"Себестоимость, {sym}": m["cost_rate"] * m["hours"],
                 }
             )
         st.dataframe(
