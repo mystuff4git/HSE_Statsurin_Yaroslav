@@ -22,11 +22,13 @@ st.title("📊 Dashboard")
 # ---------------------------------------------------------------------------
 # Проверяем наличие расчётных данных
 # ---------------------------------------------------------------------------
-if "project_result" not in st.session_state:
+# Итерация 3: основной ключ — "results". На старых сессиях (до переименования)
+# данные могут лежать в "project_result" — fallback сохраняем для совместимости.
+r: dict | None = st.session_state.get("results") or st.session_state.get("project_result")
+if r is None:
     st.warning("Сформируйте смету на странице **02 Project** для отображения Dashboard.")
     st.stop()
 
-r = st.session_state["project_result"]
 currency = r["currency"]
 overhead_rate_val = st.session_state.get("overhead_rate", 0.0)
 
