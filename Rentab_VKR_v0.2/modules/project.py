@@ -32,6 +32,12 @@ class ProjectStage:
     complexity_factor: float = 1.0
 
     def __post_init__(self) -> None:
+        """Валидирует параметры этапа сразу после инициализации dataclass.
+
+        Контракт: complexity_factor обязан быть строго положительным —
+        нулевое или отрицательное значение сломает расчёты total_hours
+        и stage_revenue, поэтому ловим как можно раньше.
+        """
         if self.complexity_factor <= 0:
             raise ValueError(
                 f"complexity_factor должен быть > 0, получено: {self.complexity_factor}"

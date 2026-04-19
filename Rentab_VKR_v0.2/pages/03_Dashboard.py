@@ -21,6 +21,9 @@ direct_labor и т.п.) остаются английскими — они вн�
 
 from __future__ import annotations
 
+import io
+from datetime import date
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -108,7 +111,10 @@ if r.get("jurisdiction_mode") == "Both":
         conv_factor = 1.0 / rate_used if rate_used > 0 else 1.0
     elif source_code == "KZT" and display_code == "RUB":
         conv_factor = rate_used
-    display_symbol = CURRENCY_SYMBOLS.get(display_code, source_symbol)
+    # CURRENCY_SYMBOLS индексируется КОДАМИ СТРАН (RF/KZ), а display_code —
+    # ISO-код валюты (RUB/KZT). Чтобы не путать сущности, держим локальный
+    # словарь ISO → символ.
+    display_symbol = {"RUB": "₽", "KZT": "₸"}.get(display_code, source_symbol)
 
 
 def cx(value: float) -> float:
@@ -151,8 +157,10 @@ if show_disb_col:
         f"Чистая прибыль (NNE), {sym}",
         f"{nne_val:,.0f}",
         delta=(
-            f"{(nne_val / total_client * 100):.1f}% маржи"
-            if total_client
+            # Маржа PSF считается от ВЫРУЧКИ ЗА УСЛУГИ (gross), а не от
+            # итогового счёта клиенту: пошлины — транзитные, прибыли не несут.
+            f"{(nne_val / gross * 100):.1f}% маржи"
+            if gross
             else None
         ),
     )
@@ -164,8 +172,10 @@ else:
         f"Чистая прибыль (NNE), {sym}",
         f"{nne_val:,.0f}",
         delta=(
-            f"{(nne_val / total_client * 100):.1f}% маржи"
-            if total_client
+            # Маржа PSF считается от ВЫРУЧКИ ЗА УСЛУГИ (gross), а не от
+            # итогового счёта клиенту: пошлины — транзитные, прибыли не несут.
+            f"{(nne_val / gross * 100):.1f}% маржи"
+            if gross
             else None
         ),
     )
@@ -307,6 +317,7 @@ else:
 
     # Жирная строка итогов через pandas Styler (st.dataframe поддерживает Styler).
     def _bold_last(row: pd.Series) -> list[str]:
+        """Возвращает CSS-стили для строки: жирный шрифт для строки «Итого»."""
         is_total = row["Этап"] == "Итого"
         return ["font-weight: 700" if is_total else "" for _ in row]
 
@@ -352,23 +363,93 @@ else:
     st.error("❌ Проект убыточен — пересмотрите ставки или состав команды")
 
 
-# --- Скачать смету (CSV) ---
-# Собираем единый CSV: блок «Этапы», пустая строка, блок «Расходы».
-csv_parts: list[str] = []
-if not stages_df.empty:
-    csv_parts.append("# Этапы проекта")
-    csv_parts.append(stages_df.to_csv(index=False))
-if not expenses_df.empty:
-    csv_parts.append("# Расходы проекта")
-    csv_parts.append(expenses_df.to_csv(index=False))
+# --- Скачать смету (XLSX) ---
+# Формируем .xlsx через pandas + openpyxl. Два листа:
+#  1) «Смета по этапам» — заголовок с названием проекта и датой + таблица этапов
+#     + последняя строка «Итого» жирным.
+#  2) «Финансовые показатели» — плоский список «показатель: значение».
+# Весь файл собирается в памяти (BytesIO), чтобы отдать st.download_button.
+def _build_xlsx_report() -> bytes:
+    """Собирает xlsx-отчёт по текущей смете и возвращает его как bytes.
 
-if csv_parts:
-    csv_bytes = "\n".join(csv_parts).encode("utf-8-sig")  # BOM для корректного Excel
-    file_name = f"{r.get('project_name', 'project').strip() or 'project'}_смета.csv"
+    Логика вынесена в функцию, чтобы не засорять основной поток рендера
+    и чтобы её можно было при желании вызвать в тесте.
+    """
+    output = io.BytesIO()
+    today_str = date.today().isoformat()
+    project_title = (r.get("project_name") or "project").strip() or "project"
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        # --- Лист 1: Смета по этапам ---
+        sheet1 = "Смета по этапам"
+        if stages_df.empty:
+            # Пустой DataFrame всё равно нужно записать, чтобы лист существовал.
+            pd.DataFrame([{"Примечание": "В смете нет этапов"}]).to_excel(
+                writer, sheet_name=sheet1, index=False
+            )
+        else:
+            # Шапка: строка 1 — заголовок (4 ячейки объединим), строка 2 — пустая,
+            # со строки 3 — таблица. startrow=2 пишет начиная с excel-row 3.
+            stages_df.to_excel(writer, sheet_name=sheet1, index=False, startrow=2)
+
+            ws = writer.sheets[sheet1]
+            # Объединяем ячейки A1:F1 (шесть столбцов таблицы) и ставим заголовок.
+            n_cols = len(stages_df.columns)
+            end_col_letter = ws.cell(row=1, column=n_cols).column_letter
+            ws.merge_cells(f"A1:{end_col_letter}1")
+            header_cell = ws["A1"]
+            header_cell.value = f"{project_title} — смета от {today_str}"
+            # Жирный заголовок (openpyxl.styles.Font импортируем лениво).
+            from openpyxl.styles import Font
+
+            header_cell.font = Font(bold=True, size=12)
+
+            # Жирная последняя строка (итоги): учитываем startrow=2 и шапку
+            # таблицы → Excel-строка = 3 (шапка) + len(stages_df) (данные) = total.
+            total_row_excel = 3 + len(stages_df)
+            for col_idx in range(1, n_cols + 1):
+                ws.cell(row=total_row_excel, column=col_idx).font = Font(bold=True)
+
+        # --- Лист 2: Финансовые показатели ---
+        sheet2 = "Финансовые показатели"
+        currency_label = f" ({sym})"
+        # Показатели дублируют карточки дашборда, но в плоском виде.
+        margin_pct = (nne_val / gross * 100) if gross else 0.0
+        effective_tax_pct = (cx(r["tax"]) / cx(r["gross_revenue"]) * 100) if r["gross_revenue"] else 0.0
+
+        fin_rows = [
+            {"Показатель": "Выручка (без перевыставляемых)" + currency_label, "Значение": f"{gross:,.0f}"},
+            {"Показатель": "Перевыставляемые расходы" + currency_label, "Значение": f"{disb_b:,.0f}"},
+            {"Показатель": "Итоговый счёт клиенту" + currency_label, "Значение": f"{total_client:,.0f}"},
+            {"Показатель": "Прямые трудозатраты" + currency_label, "Значение": f"{cx(r['direct_labor']):,.0f}"},
+            {"Показатель": "Накладные (распределённые)" + currency_label, "Значение": f"{cx(r['overheads_alloc']):,.0f}"},
+            {"Показатель": "Расходы за счёт фирмы" + currency_label, "Значение": f"{cx(r['disbursements_own']):,.0f}"},
+            {"Показатель": "Налог" + currency_label, "Значение": f"{cx(r['tax']):,.0f}"},
+            {"Показатель": "Чистая прибыль (NNE)" + currency_label, "Значение": f"{nne_val:,.0f}"},
+            {"Показатель": "Маржа, %", "Значение": f"{margin_pct:.1f}"},
+            {"Показатель": f"Средневзвешенная ставка ({sym}/ч)", "Значение": f"{cx(r['blended_rate']):,.0f}"},
+            {"Показатель": "Коэффициент рычага", "Значение": f"{r['leverage']:.2f}"},
+            {"Показатель": "Эффективная ставка налога, %", "Значение": f"{effective_tax_pct:.1f}"},
+            {"Показатель": "Налоговый режим", "Значение": r.get("regime_label", "—")},
+        ]
+        pd.DataFrame(fin_rows).to_excel(writer, sheet_name=sheet2, index=False)
+
+    return output.getvalue()
+
+
+try:
+    xlsx_bytes = _build_xlsx_report()
+    file_name = f"Rentab_смета_{(r.get('project_name') or 'project').strip() or 'project'}_{date.today().isoformat()}.xlsx"
     st.download_button(
-        label="📥 Скачать смету (CSV)",
-        data=csv_bytes,
+        label="📥 Скачать смету (Excel)",
+        data=xlsx_bytes,
         file_name=file_name,
-        mime="text/csv",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=False,
+    )
+except ImportError as exc:
+    # openpyxl может отсутствовать в окружении — мягко деградируем.
+    st.warning(
+        f"Экспорт в Excel недоступен: не установлен openpyxl ({exc}). "
+        "Добавьте его в requirements.txt и перезапустите приложение."
     )

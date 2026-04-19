@@ -1,7 +1,9 @@
 """
 Rentab v0.2 — точка входа приложения.
 
-Этот файл содержит ТОЛЬКО конфигурацию страницы и приветственный экран.
+Этот файл содержит конфигурацию страницы, автозагрузку сохранённого
+профиля фирмы и приветственный экран.
+
 Вся бизнес-логика находится в пакете modules/, данные — в data/.
 Страницы приложения автоматически подхватываются из папки pages/.
 
@@ -9,7 +11,15 @@ Rentab v0.2 — точка входа приложения.
     streamlit run app.py
 """
 
+from pathlib import Path
+
 import streamlit as st
+
+from modules.profile import apply_profile, load_profile
+
+# Путь до data/ вычисляется относительно этого файла, чтобы приложение
+# работало независимо от CWD Streamlit.
+DATA_DIR = Path(__file__).parent / "data"
 
 st.set_page_config(
     page_title="Rentab v0.2",
@@ -17,6 +27,22 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ---------------------------------------------------------------------------
+# Автозагрузка сохранённого профиля фирмы.
+# Делаем один раз за сессию — чтобы последующие правки на 01_Setup не
+# затирались старыми значениями из файла при каждом rerun.
+# ---------------------------------------------------------------------------
+if not st.session_state.get("_profile_autoloaded"):
+    try:
+        profile = load_profile(DATA_DIR)
+    except Exception as exc:  # битый JSON — не валим приложение
+        profile = None
+        st.warning(f"Не удалось прочитать firm_profile.json: {exc}")
+    if profile:
+        apply_profile(st.session_state, profile)
+        st.info("Загружен сохранённый профиль фирмы", icon="💾")
+    st.session_state["_profile_autoloaded"] = True
 
 st.title("⚖️ Rentab v0.2")
 st.subheader("Калькулятор рентабельности IP-проектов")
