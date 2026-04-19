@@ -31,6 +31,7 @@ from modules.jurisdiction import (
     TAX_RATES_RF_2026,
     TAX_RATES_KZ_2026,
 )
+from modules.profile import apply_profile, load_profile, reset_profile, save_profile
 from modules.team import EmployeeRole, ROLE_OPTIONS
 
 # ---------------------------------------------------------------------------
@@ -57,6 +58,22 @@ RF_REGIME_LABELS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
+# Автозагрузка профиля (дубль из app.py — на случай, если пользователь
+# зашёл напрямую на страницу Setup минуя стартовую страницу). Флаг
+# _profile_autoloaded не даёт повторно затереть правки.
+# ---------------------------------------------------------------------------
+if not st.session_state.get("_profile_autoloaded"):
+    try:
+        _profile = load_profile(DATA_DIR)
+    except Exception as exc:
+        _profile = None
+        st.warning(f"Не удалось прочитать firm_profile.json: {exc}")
+    if _profile:
+        apply_profile(st.session_state, _profile)
+        st.info("Загружен сохранённый профиль фирмы", icon="💾")
+    st.session_state["_profile_autoloaded"] = True
+
+# ---------------------------------------------------------------------------
 # Инициализация session_state дефолтами (чтобы страница не падала
 # при повторном заходе или навигации между вкладками)
 # ---------------------------------------------------------------------------
@@ -70,6 +87,47 @@ st.session_state.setdefault("exchange_rate_rub_per_kzt", 0.18)  # индикат
 # ---------------------------------------------------------------------------
 st.title("⚙️ Настройка среды")
 st.caption("Заполните три вкладки: юрисдикция, команда, накладные фирмы.")
+
+# ---------------------------------------------------------------------------
+# Управление профилем фирмы — сохранить / загрузить / сбросить
+# ---------------------------------------------------------------------------
+with st.container():
+    btn_save, btn_load, btn_reset, _spacer = st.columns([1, 1, 1, 3])
+
+    if btn_save.button("💾 Сохранить профиль", use_container_width=True):
+        try:
+            save_profile(DATA_DIR, st.session_state)
+            st.success("Профиль фирмы сохранён")
+        except (OSError, TypeError) as exc:
+            st.error(f"Не удалось сохранить профиль: {exc}")
+
+    if btn_load.button("📂 Загрузить профиль", use_container_width=True):
+        try:
+            profile = load_profile(DATA_DIR)
+        except Exception as exc:
+            profile = None
+            st.error(f"Файл профиля битый: {exc}")
+        if profile:
+            apply_profile(st.session_state, profile)
+            st.success(f"Загружено ключей: {len(profile)}")
+            st.rerun()
+        elif profile is not None:
+            st.info("Файл профиля найден, но пуст.")
+        else:
+            st.info("Файл профиля ещё не создан — нечего загружать.")
+
+    if btn_reset.button("🗑 Сбросить профиль", use_container_width=True):
+        existed = reset_profile(DATA_DIR, st.session_state)
+        # Сбрасываем флаг автозагрузки, чтобы следующая загрузка странички
+        # не сочла, что «профиль уже применён».
+        st.session_state["_profile_autoloaded"] = False
+        if existed:
+            st.success("Профиль удалён и сессия очищена")
+        else:
+            st.info("Файла профиля не было — очищена только сессия")
+        st.rerun()
+
+st.markdown("---")
 
 tab_jur, tab_team, tab_exp = st.tabs(
     ["🏛️ Юрисдикция и налоги", "👥 Команда", "🧾 Расходы фирмы"]
@@ -103,14 +161,19 @@ with tab_jur:
         rf_params = {"country": "RF", "regime": rf_regime}
 
         if rf_regime == "USN":
+            # Все проценты в UI-лейблах выводим через f-строки из TAX_RATES_RF_2026,
+            # чтобы при изменении ставки в constants файле не нужно было править UI.
             col_obj, col_vat, col_sc = st.columns(3)
             with col_obj:
                 usn_object = st.selectbox(
                     "Объект налогообложения",
                     options=list(TAX_RATES_RF_2026["USN"].keys()),
                     format_func=lambda o: {
-                        "income": "Доходы (6%)",
-                        "income_minus_expenses": "Доходы − расходы (15%)",
+                        "income": f"Доходы ({TAX_RATES_RF_2026['USN']['income'] * 100:.0f}%)",
+                        "income_minus_expenses": (
+                            f"Доходы − расходы "
+                            f"({TAX_RATES_RF_2026['USN']['income_minus_expenses'] * 100:.0f}%)"
+                        ),
                     }[o],
                     key="rf_usn_object",
                 )
@@ -118,7 +181,7 @@ with tab_jur:
                 usn_vat = st.selectbox(
                     "НДС (с 2026 г.)",
                     options=list(TAX_RATES_RF_2026["USN_VAT"].keys()),
-                    format_func=lambda v: {"none": "Без НДС", "5%": "5%", "7%": "7%"}[v],
+                    format_func=lambda v: "Без НДС" if v == "none" else v,
                     key="rf_usn_vat",
                 )
             with col_sc:
@@ -126,8 +189,14 @@ with tab_jur:
                     "Страховые взносы",
                     options=list(TAX_RATES_RF_2026["SOCIAL_CONTRIBUTIONS"].keys()),
                     format_func=lambda s: {
-                        "standard": "Стандарт (30%)",
-                        "zero": "АУСН (0%)",
+                        "standard": (
+                            f"Стандарт "
+                            f"({TAX_RATES_RF_2026['SOCIAL_CONTRIBUTIONS']['standard'] * 100:.0f}%)"
+                        ),
+                        "zero": (
+                            f"АУСН "
+                            f"({TAX_RATES_RF_2026['SOCIAL_CONTRIBUTIONS']['zero'] * 100:.0f}%)"
+                        ),
                     }[s],
                     key="rf_usn_sc",
                 )
@@ -138,8 +207,11 @@ with tab_jur:
             )
 
         elif rf_regime == "AUSN":
+            _ausn_rate = TAX_RATES_RF_2026["AUSN"]["income_tax_rate"] * 100
+            _ausn_contrib = TAX_RATES_RF_2026["AUSN"]["insurance_contributions"] * 100
             st.info(
-                "АУСН: налог 8% с дохода, страховые взносы 0%, НДС не применяется. "
+                f"АУСН: налог {_ausn_rate:.0f}% с дохода, страховые взносы "
+                f"{_ausn_contrib:.0f}%, НДС не применяется. "
                 "Доступен для компаний с доходом до 60 млн ₽/год и штатом до 5 чел.",
                 icon="ℹ️",
             )
@@ -167,8 +239,12 @@ with tab_jur:
                 "Тип клиентов",
                 options=list(TAX_RATES_RF_2026["NPD"].keys()),
                 format_func=lambda c: {
-                    "individual": "Физлица (4%)",
-                    "legal_entity": "Юрлица / ИП (6%)",
+                    "individual": (
+                        f"Физлица ({TAX_RATES_RF_2026['NPD']['individual'] * 100:.0f}%)"
+                    ),
+                    "legal_entity": (
+                        f"Юрлица / ИП ({TAX_RATES_RF_2026['NPD']['legal_entity'] * 100:.0f}%)"
+                    ),
                 }[c],
                 horizontal=True,
                 key="rf_npd_client",
@@ -184,7 +260,10 @@ with tab_jur:
             kz_form = st.radio(
                 "Форма организации",
                 options=["too", "ip"],
-                format_func=lambda f: {"too": "ТОО (КПН 20%)", "ip": "ИП (ИПН 10%)"}[f],
+                format_func=lambda f: {
+                    "too": f"ТОО (КПН {TAX_RATES_KZ_2026['CIT'] * 100:.0f}%)",
+                    "ip": f"ИП (ИПН {TAX_RATES_KZ_2026['IIT_IP'] * 100:.0f}%)",
+                }[f],
                 horizontal=True,
                 key="kz_form_choice",
             )
@@ -192,7 +271,7 @@ with tab_jur:
             kz_vat = st.radio(
                 "НДС",
                 options=list(TAX_RATES_KZ_2026["VAT"].keys()),
-                format_func=lambda v: {"none": "Без НДС", "16%": "16%"}[v],
+                format_func=lambda v: "Без НДС" if v == "none" else v,
                 horizontal=True,
                 key="kz_vat_choice",
             )
