@@ -62,6 +62,17 @@ TAX_RATES_RF_2026: dict[str, Any] = {
         "high_rate": 0.15,
         "threshold": 5_000_000,   # руб./год
     },
+    # АУСН — Автоматизированная УСН (с 2022 г., пилотный режим).
+    # Фиксированная ставка 8% с дохода; НДС не применяется;
+    # страховые взносы 0% (работодатель не платит, бюджет компенсирует).
+    # Ограничения: доход до 60 млн ₽/год, штат до 5 чел.
+    "AUSN": {
+        "country": "RF",
+        "income_tax_rate": 0.08,
+        "vat": None,
+        "insurance_contributions": 0.0,
+        "label": "АУСН — Автоматизированная УСН (8%, без страховых взносов)",
+    },
 }
 
 
@@ -503,6 +514,17 @@ class TaxCalculator:
             vat = taxable_base * vat_rate
 
             label = f"ОСНО (прибыль {income_rate * 100:.0f}% + НДС {vat_rate * 100:.0f}%)"
+
+        elif regime == "AUSN":
+            # АУСН: плоские 8% от дохода, НДС и взносы не применяются.
+            # Налоговая база — как у «УСН Доходы», просто ставка выше.
+            ausn = rates["AUSN"]
+            income_rate = float(ausn["income_tax_rate"])
+            income_tax_base = taxable_base
+            income_tax = taxable_base * income_rate
+            vat_rate = 0.0
+            vat = 0.0
+            label = ausn["label"]
 
         elif regime == "NPD":
             client_type = p.get("client_type", "legal_entity")

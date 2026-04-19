@@ -234,7 +234,9 @@ class ExpenseManager:
         """
         if direct_costs <= 0:
             return 0.0
-        overhead_rate = self.total_overheads_monthly() / self.billable_hours_per_month
+        # Переиспользуем calculate_overhead_rate — единый источник правды для ставки
+        # (DRY + защита от ZeroDivisionError внутри самого метода).
+        overhead_rate = self.calculate_overhead_rate(self.billable_hours_per_month)
         return overhead_rate * direct_costs
 
     # -- расходы проекта ----------------------------------------------------
