@@ -53,6 +53,15 @@ TAX_RATES_RF_2026: dict[str, Any] = {
         "standard": 0.30,   # стандартный тариф
         "zero": 0.0,        # для плательщиков АУСН
     },
+    # НДФЛ (упрощённая двухступенчатая модель по запросу ВКР):
+    # 13% до порога, 15% сверх. Порог трактуется как годовая сумма,
+    # т.е. для применения прогрессии в gross_salary нужно передавать
+    # годовой (а не месячный) доход работника.
+    "NDFL": {
+        "base_rate": 0.13,
+        "high_rate": 0.15,
+        "threshold": 5_000_000,   # руб./год
+    },
 }
 
 
@@ -340,21 +349,25 @@ class TaxCalculator:
         raise ValueError(f"Неизвестная страна: {country!r}")
 
     def add_payroll_taxes(self, gross_salary: float) -> dict:
-        """Рассчитывает зарплатные налоги и взносы (только для РК).
+        """Рассчитывает зарплатные налоги и взносы (РФ и РК).
 
         Метод раскладывает начисленную («грязную») зарплату на:
-        - суммы, удерживаемые у работника (ОПВ/ИПН/ВОСМС);
-        - суммы, уплачиваемые работодателем сверху (ООСМС/СО/ОПВР).
+        - суммы, удерживаемые у работника (РФ: НДФЛ; РК: ОПВ/ИПН/ВОСМС);
+        - суммы, уплачиваемые работодателем сверху
+          (РФ: страховые взносы; РК: ООСМС/СО/ОПВР).
 
         Используется при расчёте cost_rate сотрудника в Setup: полная
         себестоимость часа = (зарплата + взносы работодателя) / часы.
 
         Args:
-            gross_salary: Начисленная зарплата работника в тенге.
+            gross_salary: Начисленная зарплата работника.
+                          Для РФ — трактуется как годовая (для применения
+                          порога НДФЛ 5 млн руб.); для РК — месячная.
 
         Returns:
             Словарь:
             {
+                "country"               : str,             # "RF" | "KZ"
                 "gross_salary"          : float,           # «грязная» зарплата
                 "employee"              : dict[str,float], # что удержали у работника
                 "employer"              : dict[str,float], # что платит работодатель
@@ -365,13 +378,68 @@ class TaxCalculator:
             }
 
         Raises:
-            ValueError: Если режим не относится к РК.
+            ValueError: Если юрисдикция не поддерживается или gross_salary < 0.
         """
-        if self.params["country"] != "KZ":
-            raise ValueError("add_payroll_taxes реализован только для РК")
         if gross_salary < 0:
             raise ValueError(f"gross_salary не может быть отрицательной: {gross_salary}")
 
+        country = self.params["country"]
+        if country == "RF":
+            return self._payroll_rf(gross_salary)
+        if country == "KZ":
+            return self._payroll_kz(gross_salary)
+        raise ValueError(f"add_payroll_taxes: неизвестная юрисдикция {country!r}")
+
+    def _payroll_rf(self, gross_salary: float) -> dict:
+        """Зарплатные налоги по РФ (упрощённая модель НДФЛ 13%/15%).
+
+        Работодатель платит сверху страховые взносы: 30% (standard) либо
+        0% (zero) — для плательщиков АУСН. Тариф читается из self.params
+        (ключ "social_contributions"); если ключа нет — берётся "standard".
+
+        НДФЛ с работника — двухступенчатая прогрессия из TAX_RATES_RF_2026:
+        base_rate до threshold, high_rate — со сверхпороговой части.
+        """
+        ndfl = TAX_RATES_RF_2026["NDFL"]
+        sc_rates = TAX_RATES_RF_2026["SOCIAL_CONTRIBUTIONS"]
+
+        sc_choice = self.params.get("social_contributions", "standard")
+        if sc_choice not in sc_rates:
+            raise ValueError(
+                f"Неизвестный тариф страховых взносов: {sc_choice!r}. "
+                f"Допустимые: {list(sc_rates)}"
+            )
+        sc_rate = sc_rates[sc_choice]
+
+        threshold = ndfl["threshold"]
+        if gross_salary <= threshold:
+            ndfl_amount = gross_salary * ndfl["base_rate"]
+        else:
+            ndfl_amount = (
+                threshold * ndfl["base_rate"]
+                + (gross_salary - threshold) * ndfl["high_rate"]
+            )
+
+        insurance = gross_salary * sc_rate
+
+        employee = {"НДФЛ": ndfl_amount}
+        employer = {"Страховые взносы": insurance}
+        emp_total = sum(employee.values())
+        er_total = sum(employer.values())
+
+        return {
+            "country": "RF",
+            "gross_salary": gross_salary,
+            "employee": employee,
+            "employer": employer,
+            "employee_total": emp_total,
+            "employer_total": er_total,
+            "net_to_employee": gross_salary - emp_total,
+            "total_employer_cost": gross_salary + er_total,
+        }
+
+    def _payroll_kz(self, gross_salary: float) -> dict:
+        """Зарплатные налоги и взносы по РК (ОПВ/ИПН/ВОСМС + ООСМС/СО/ОПВР)."""
         emp_rates = TAX_RATES_KZ_2026["PAYROLL_EMPLOYEE"]
         er_rates = TAX_RATES_KZ_2026["PAYROLL_EMPLOYER"]
 
@@ -381,6 +449,7 @@ class TaxCalculator:
         er_total = sum(employer.values())
 
         return {
+            "country": "KZ",
             "gross_salary": gross_salary,
             "employee": employee,
             "employer": employer,

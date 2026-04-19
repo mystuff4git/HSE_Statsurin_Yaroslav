@@ -90,10 +90,20 @@ class Expense:
     def from_dict(cls, data: dict) -> "Expense":
         """Создаёт Expense из словаря (например, прочитанного из JSON).
 
-        Недостающие поля заполняются значениями по умолчанию.
+        Недостающие поля заполняются значениями по умолчанию — это даёт
+        устойчивость к неполным записям в JSON-шаблонах и в session_state.
+
+        Args:
+            data: Словарь с произвольным набором полей Expense. Единственное
+                  поле без «разумного» дефолта — name, но и для него мы
+                  подставляем пустую строку, чтобы не падать на битых записях
+                  (проверку на непустое имя оставляем вызывающему коду).
+
+        Returns:
+            Новый Expense со всеми подстановками дефолтов.
         """
         return cls(
-            name=str(data["name"]),
+            name=str(data.get("name", "")),
             category=str(data.get("category", "overhead")),
             amount=float(data.get("amount", 0.0)),
             currency=str(data.get("currency", "RUB")),
@@ -127,14 +137,31 @@ class ExpenseManager:
     2. project_expenses — прямые расходы по конкретному проекту: пошлины,
        командировки и прочее.
 
+    Также хранит `billable_hours_per_month` — среднее число оплачиваемых
+    часов всей фирмы за месяц. Используется как знаменатель в формуле
+    overhead_rate = Σ(monthly overheads) / billable_hours_per_month,
+    а через неё — в аллокации накладных на конкретный проект.
+
     По умолчанию оба списка пусты: расходы проекта добавляются, только
     если они реально есть в задаче.
     """
 
-    def __init__(self) -> None:
-        """Создаёт пустой менеджер расходов."""
+    def __init__(self, billable_hours_per_month: float = 160.0) -> None:
+        """Создаёт пустой менеджер расходов.
+
+        Args:
+            billable_hours_per_month: Плановый объём оплачиваемых часов
+                всей фирмы в месяц. 160 часов — средняя норма при полной
+                загрузке одного юриста (8 ч × ~20 рабочих дней).
+                Можно переопределить атрибутом позднее.
+        """
+        if billable_hours_per_month <= 0:
+            raise ValueError(
+                f"billable_hours_per_month должно быть > 0, получено: {billable_hours_per_month}"
+            )
         self._overheads: list[Expense] = []
         self._project_expenses: list[Expense] = []
+        self.billable_hours_per_month: float = float(billable_hours_per_month)
 
     # -- накладные фирмы ----------------------------------------------------
 
@@ -187,27 +214,28 @@ class ExpenseManager:
         return self.total_overheads_monthly() / billable_hours_per_month
 
     def get_overheads_allocated(self, direct_costs: float) -> float:
-        """Аллоцированные накладные в абсолютном выражении.
+        """Аллоцированные накладные на проект в абсолютном выражении.
 
-        Поддерживается «прямая» аллокация: доля накладных, приходящаяся на
-        проект, трактуется как пропорция от прямых трудозатрат. Это упрощённый
-        вариант, полезный когда billable_hours_per_month ещё не задано.
+        Формула (прямая аллокация):
+            overhead_rate = total_overheads_monthly() / billable_hours_per_month
+            allocated     = overhead_rate × direct_costs
 
-        Для основной модели (по часам) используйте calculate_overhead_rate()
-        и умножьте на фактические часы проекта.
+        direct_costs здесь — любой показатель объёма работы по проекту,
+        к которому мы хотим привязать накладные (обычно прямые трудозатраты
+        или часы). Ставка берётся как доля месячных накладных на единицу
+        стандартного оплачиваемого часа — см. self.billable_hours_per_month.
 
         Args:
-            direct_costs: Прямые трудозатраты по проекту.
+            direct_costs: База для аллокации (трудозатраты либо часы по проекту).
 
         Returns:
-            Сумма накладных, отнесённых на проект. Ставка-множитель берётся
-            как отношение месячных накладных к прямым затратам-базису —
-            поэтому при нулевом direct_costs возвращается 0.0.
+            Сумма накладных, отнесённых на проект. 0.0 при нулевой базе
+            или при пустом списке накладных.
         """
         if direct_costs <= 0:
             return 0.0
-        monthly = self.total_overheads_monthly()
-        return monthly  # простое отнесение месячного объёма (как fallback)
+        overhead_rate = self.total_overheads_monthly() / self.billable_hours_per_month
+        return overhead_rate * direct_costs
 
     # -- расходы проекта ----------------------------------------------------
 

@@ -20,19 +20,24 @@ class EmployeeRole(str, Enum):
     """Роли сотрудников в юридической фирме (иерархия PSF).
 
     Порядок ролей отражает типичную иерархию профессиональной сервисной фирмы:
-    Partner > Senior > Associate > Junior.
+    Партнёр > Старший юрист > Младший юрист > Стажёр.
+
+    Значения — русские, потому что эти строки напрямую показываются в UI
+    и сохраняются в session_state/JSON. Любой новой роли достаточно
+    добавить сюда и (при необходимости) классифицировать в SENIOR_ROLES
+    или JUNIOR_ROLES — остальные модули подхватят автоматически.
     """
 
-    PARTNER = "Partner"
-    SENIOR = "Senior"
-    ASSOCIATE = "Associate"
-    JUNIOR = "Junior"
+    PARTNER = "Партнёр"
+    SENIOR = "Старший юрист"
+    ASSOCIATE = "Младший юрист"
+    JUNIOR = "Стажёр"
 
 
 # Список строковых значений для использования в st.selectbox / st.data_editor
 ROLE_OPTIONS: list[str] = [role.value for role in EmployeeRole]
 
-# Разделение ролей для расчёта Leverage
+# Разделение ролей для расчёта Leverage (используется calculator.leverage()).
 SENIOR_ROLES: set[str] = {EmployeeRole.PARTNER.value, EmployeeRole.SENIOR.value}
 JUNIOR_ROLES: set[str] = {EmployeeRole.ASSOCIATE.value, EmployeeRole.JUNIOR.value}
 
@@ -86,7 +91,11 @@ def default_team_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "Имя": ["Иванов А.", "Петрова М.", "Сидоров К."],
-            "Роль": ["Partner", "Senior", "Associate"],
+            "Роль": [
+                EmployeeRole.PARTNER.value,
+                EmployeeRole.SENIOR.value,
+                EmployeeRole.ASSOCIATE.value,
+            ],
             "Ставка (Billing)": [15000.0, 10000.0, 6000.0],
             "Себестоимость (Cost)": [8000.0, 5500.0, 3500.0],
         }

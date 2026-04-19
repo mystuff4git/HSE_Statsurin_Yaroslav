@@ -8,13 +8,15 @@ Rentab v0.2 — модуль финансовых расчётов.
 
 from __future__ import annotations
 
+from modules.team import JUNIOR_ROLES, SENIOR_ROLES
+
 
 # ---------------------------------------------------------------------------
 # Тип данных для описания члена команды (используется внутри модуля)
 # ---------------------------------------------------------------------------
 # team_member: dict со следующими полями:
 #   "name"         : str   — имя/ФИО сотрудника
-#   "role"         : str   — одна из: "Partner", "Senior", "Associate", "Junior"
+#   "role"         : str   — значение EmployeeRole (см. modules.team)
 #   "billing_rate" : float — внешняя ставка для клиента (руб./час или тенге/час)
 #   "cost_rate"    : float — себестоимость часа сотрудника (ФОТ + соц. отчисления)
 #   "hours"        : float — часы, запланированные на проект
@@ -52,32 +54,34 @@ def blended_rate(team: list[dict]) -> float:
 def leverage(team: list[dict]) -> float:
     """Коэффициент рычага команды (Leverage).
 
-    Формула: Σ часов (Associate + Junior) / Σ часов (Partner + Senior)
+    Формула: Σ часов (младшие) / Σ часов (старшие)
 
     Leverage — индикатор эффективности структуры PSF-команды. Высокий Leverage
     означает, что бо́льшую часть работы выполняют менее дорогие сотрудники под
     надзором партнёров, что улучшает маржинальность.
 
+    Классификация ролей на старших / младших берётся из модуля team
+    (SENIOR_ROLES и JUNIOR_ROLES), чтобы оба модуля использовали один источник
+    истины и при добавлении роли не требовалось править эту функцию.
+
     Args:
         team: Список словарей, каждый содержит "role" (str) и "hours" (float).
-              Допустимые значения role: "Partner", "Senior", "Associate", "Junior".
+              Значения role должны попадать либо в team.SENIOR_ROLES,
+              либо в team.JUNIOR_ROLES.
 
     Returns:
         Значение Leverage. Возвращает 0.0, если нет старших сотрудников.
 
     Example:
         >>> team = [
-        ...     {"role": "Partner",   "hours": 10},
-        ...     {"role": "Associate", "hours": 40},
+        ...     {"role": "Партнёр",       "hours": 10},
+        ...     {"role": "Младший юрист", "hours": 40},
         ... ]
         >>> leverage(team)
         4.0
     """
-    senior_roles = {"Partner", "Senior"}
-    junior_roles = {"Associate", "Junior"}
-
-    senior_hours = sum(m["hours"] for m in team if m["role"] in senior_roles)
-    junior_hours = sum(m["hours"] for m in team if m["role"] in junior_roles)
+    senior_hours = sum(m["hours"] for m in team if m["role"] in SENIOR_ROLES)
+    junior_hours = sum(m["hours"] for m in team if m["role"] in JUNIOR_ROLES)
 
     if senior_hours == 0:
         return 0.0
