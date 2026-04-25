@@ -3,10 +3,8 @@
     "jurisdiction": "RF",
     "rf": {
       "country": "RF",
-      "regime": "USN",
-      "object": "income",
-      "vat": "none",
-      "social_contributions": "standard"
+      "regime": "AUSN",
+      "social_contributions": "zero"
     },
     "kz": null,
     "exchange_rate_rub_per_kzt": null
