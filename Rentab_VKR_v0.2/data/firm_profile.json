@@ -1,0 +1,108 @@
+{
+  "jurisdiction_params": {
+    "jurisdiction": "RF",
+    "rf": {
+      "country": "RF",
+      "regime": "AUSN",
+      "social_contributions": "zero"
+    },
+    "kz": null,
+    "exchange_rate_rub_per_kzt": null
+  },
+  "team": [
+    {
+      "name": "А.М.А.",
+      "role": "Партнёр",
+      "billing_rate": 7000.0,
+      "cost_rate": 1500.0
+    },
+    {
+      "name": "С.Я.А.",
+      "role": "Партнёр",
+      "billing_rate": 6000.0,
+      "cost_rate": 900.0
+    },
+    {
+      "name": "А.А.А.",
+      "role": "Младший юрист",
+      "billing_rate": 5000.0,
+      "cost_rate": 550.0
+    },
+    {
+      "name": "С.О.А.",
+      "role": "Стажёр",
+      "billing_rate": 4000.0,
+      "cost_rate": 400.0
+    },
+    {
+      "name": "К.М.А.",
+      "role": "Старший юрист",
+      "billing_rate": 6000.0,
+      "cost_rate": 1000.0
+    },
+    {
+      "name": "М. Ю.В.",
+      "role": "Младший юрист",
+      "billing_rate": 5000.0,
+      "cost_rate": 525.0
+    },
+    {
+      "name": "Ч.А.А.",
+      "role": "Партнёр",
+      "billing_rate": 7000.0,
+      "cost_rate": 1500.0
+    }
+  ],
+  "firm_expenses": [
+    {
+      "name": "Облако",
+      "category": "overhead",
+      "amount": 3500.0,
+      "currency": "RUB",
+      "period": "monthly",
+      "billable": false
+    },
+    {
+      "name": "Таск-трекер",
+      "category": "overhead",
+      "amount": 2500.0,
+      "currency": "RUB",
+      "period": "monthly",
+      "billable": false
+    },
+    {
+      "name": "Бухгалтерия",
+      "category": "overhead",
+      "amount": 20000.0,
+      "currency": "RUB",
+      "period": "monthly",
+      "billable": false
+    },
+    {
+      "name": "Well-being программа",
+      "category": "overhead",
+      "amount": 210000.0,
+      "currency": "RUB",
+      "period": "annual",
+      "billable": false
+    },
+    {
+      "name": "Интернет для ИП ",
+      "category": "overhead",
+      "amount": 1500.0,
+      "currency": "RUB",
+      "period": "monthly",
+      "billable": false
+    },
+    {
+      "name": "Банковские расходы",
+      "category": "overhead",
+      "amount": 2500.0,
+      "currency": "RUB",
+      "period": "monthly",
+      "billable": false
+    }
+  ],
+  "billable_hours_per_month": 1120.0,
+  "exchange_rate_rub_per_kzt": 0.18
+}
