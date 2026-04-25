@@ -521,8 +521,8 @@ with tab_team:
         h1, h2, h3, h4, h5, h6 = st.columns([2, 1.2, 1, 1, 1, 0.5])
         h1.markdown("**Имя**")
         h2.markdown("**Роль**")
-        h3.markdown("**Billing**")
-        h4.markdown("**Cost rate**")
+        h3.markdown("**Ставка клиенту**")
+        h4.markdown("**Себестоимость**")
         h5.markdown("**ФОТ ₽/ч**")
         h6.markdown("")
 
@@ -551,7 +551,7 @@ with tab_team:
 
         st.caption(
             f"Всего: {len(team_list)} сотрудников · "
-            "столбцы: Имя · Роль · Billing · Cost rate · ФОТ ₽/ч (расчёт) · 🗑"
+            "столбцы: Имя · Роль · Ставка клиенту · Себестоимость · ФОТ ₽/ч (расчёт) · 🗑"
         )
 
 
@@ -561,7 +561,7 @@ with tab_team:
 with tab_exp:
     st.subheader("Накладные расходы фирмы (Overheads)")
     st.caption(
-        "Ставка накладных = Σ(monthly overheads) / billable_hours_per_month. "
+        "Ставка накладных = Σ(месячные накладные) / биллируемые часы в месяц. "
         "Аллоцируется на проект пропорционально отработанным часам."
     )
 
@@ -711,11 +711,11 @@ with tab_exp:
     m1.metric("Контрактные часы", f"{contract_hours_total:,.0f} ч/мес")
     m2.metric("Биллируемые часы", f"{billable_hours:,.0f} ч/мес")
     m3.metric("Утилизация", f"{utilization_pct:.0f}%")
-    m4.metric(f"Overhead Rate, {sym}/ч", f"{oh_rate:,.1f}")
+    m4.metric(f"Ставка накладных, {sym}/ч", f"{oh_rate:,.1f}")
 
     st.caption(
         f"Накладные в месяц: **{total_monthly:,.0f} {sym}** · "
-        f"Overhead Rate = накладные ÷ биллируемые часы."
+        f"Ставка накладных = накладные ÷ биллируемые часы."
     )
 
     # Кладём посчитанную ставку в session_state — чтобы 02_Project не пересчитывал заново.

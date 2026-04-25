@@ -96,8 +96,8 @@ def default_team_df() -> pd.DataFrame:
                 EmployeeRole.SENIOR.value,
                 EmployeeRole.ASSOCIATE.value,
             ],
-            "Ставка (Billing)": [15000.0, 10000.0, 6000.0],
-            "Себестоимость (Cost)": [8000.0, 5500.0, 3500.0],
+            "Ставка": [15000.0, 10000.0, 6000.0],
+            "Себестоимость": [8000.0, 5500.0, 3500.0],
         }
     )
 
@@ -110,7 +110,7 @@ def team_from_editor(df: pd.DataFrame) -> list[dict]:
 
     Args:
         df: DataFrame из st.data_editor со столбцами:
-            "Имя", "Роль", "Ставка (Billing)", "Себестоимость (Cost)".
+            "Имя", "Роль", "Ставка", "Себестоимость".
 
     Returns:
         Список словарей, по одному на каждого сотрудника.
@@ -120,8 +120,8 @@ def team_from_editor(df: pd.DataFrame) -> list[dict]:
         >>> df = pd.DataFrame({
         ...     "Имя": ["Иванов"],
         ...     "Роль": ["Partner"],
-        ...     "Ставка (Billing)": [15000.0],
-        ...     "Себестоимость (Cost)": [8000.0],
+        ...     "Ставка": [15000.0],
+        ...     "Себестоимость": [8000.0],
         ... })
         >>> team_from_editor(df)[0]["billing_rate"]
         15000.0
@@ -132,8 +132,8 @@ def team_from_editor(df: pd.DataFrame) -> list[dict]:
             {
                 "name": row["Имя"],
                 "role": row["Роль"],
-                "billing_rate": float(row["Ставка (Billing)"]),
-                "cost_rate": float(row["Себестоимость (Cost)"]),
+                "billing_rate": float(row["Ставка"]),
+                "cost_rate": float(row["Себестоимость"]),
             }
         )
     return result
