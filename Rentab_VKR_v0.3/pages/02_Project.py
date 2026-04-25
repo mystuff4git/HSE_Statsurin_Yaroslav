@@ -1,21 +1,24 @@
 """
-Rentab v0.2 — страница 02: Проект и смета (итерация 3).
+Rentab v0.3 — страница 02: Проект и смета.
 
 Страница собирает все параметры проекта в одной форме:
 
+0. Выбор модели ценообразования: «Биллинговая» или «Фиксированная».
 1. Общие данные проекта (название — обязательно; клиент / описание — нет).
 2. Этапы проекта: сотрудник из состава команды + часы. Под таблицей
-   автоматически пересчитывается Blended Rate и Leverage.
+   автоматически пересчитывается Blended Rate и Leverage. В режиме
+   «Фиксированная» вместо колонки выручки показывается себестоимость.
 3. Необязательный блок расходов (свёрнут в expander): пошлины из каталогов
    Роспатента / Казпатента + произвольный расход (свой с указанием категории).
+4. (только для «Фиксированной») слайдер целевой маржи.
 
 По кнопке «Рассчитать смету» страница:
-- собирает team_with_hours из этапов,
-- создаёт ExpenseManager из накладных фирмы + добавляет расходы проекта,
-- считает налог через TaxCalculator по jurisdiction_params,
-- сохраняет финальную структуру в st.session_state["results"] (и оставляет
-  в session_state["project_result"] ради обратной совместимости с Dashboard),
-- показывает краткий preview Gross / Tax / NNE и кнопку «Перейти к дашборду».
+- в режиме «Биллинговая» считает Gross/NNE через calculator.py + TaxCalculator
+  (как в v0.2);
+- в режиме «Фиксированная» вызывает FixedPriceCalculator.calculate() —
+  он сам строит Total Costs, Fixed Price и stage_flags;
+- сохраняет результат в st.session_state["results"] с маркером pricing_model
+  ("billing" | "fixed"), чтобы дашборд знал, какой набор полей читать.
 
 Хардкодов нет — все параметры берутся из session_state и констант модулей.
 """
@@ -34,6 +37,7 @@ from modules.calculator import (
     nne,
 )
 from modules.expenses import Expense, ExpenseManager
+from modules.fixed_price import FixedPriceCalculator
 from modules.jurisdiction import (
     CURRENCY_CODES,
     CURRENCY_SYMBOLS,
@@ -45,6 +49,25 @@ from modules.project import (
     load_duties_catalog,
 )
 from modules.team import total_direct_labor
+
+
+# ---------------------------------------------------------------------------
+# Подписи моделей ценообразования.
+# Ключи — внутренние идентификаторы, которые сохраняются в results
+# и читаются дашбордом. Значения — подписи для st.radio.
+# ---------------------------------------------------------------------------
+PRICING_MODELS: dict[str, str] = {
+    "billing": "Биллинговая (часы × ставка)",
+    "fixed":   "Фиксированная (издержки + маржа)",
+}
+PRICING_MODEL_LABELS: list[str] = list(PRICING_MODELS.values())
+
+# Параметры слайдера целевой маржи (в процентах).
+# Все значения в одном месте — никаких магических чисел в UI.
+TARGET_MARGIN_MIN_PCT: int = 5
+TARGET_MARGIN_MAX_PCT: int = 80
+TARGET_MARGIN_DEFAULT_PCT: int = 30
+TARGET_MARGIN_STEP_PCT: int = 1
 
 # ---------------------------------------------------------------------------
 # Пути к каталогам пошлин
@@ -74,6 +97,30 @@ st.session_state.setdefault("custom_expenses", [])         # list[dict]
 # Заголовок
 # ---------------------------------------------------------------------------
 st.title("📋 Проект и смета")
+
+# ---------------------------------------------------------------------------
+# Блок 0 — Выбор модели ценообразования
+# ---------------------------------------------------------------------------
+# Переключатель определяет, по какой формуле считать смету:
+#   «Биллинговая»   — выручка = часы × ставка (поведение v0.2);
+#   «Фиксированная» — цена = издержки / (1 − margin − tax_rate) (v0.3).
+# Значение сохраняется в session_state["pricing_model"] (PROFILE_KEYS),
+# поэтому при загрузке профиля выбор автоматически восстанавливается.
+pricing_model_label = st.radio(
+    "Модель ценообразования",
+    PRICING_MODEL_LABELS,
+    horizontal=True,
+    key="pricing_model",
+)
+# Преобразуем подпись радио к внутреннему идентификатору ("billing" | "fixed").
+# Используем явный поиск по PRICING_MODELS — это надёжнее, чем парсить строку.
+pricing_model_key: str = next(
+    (k for k, v in PRICING_MODELS.items() if v == pricing_model_label),
+    "billing",
+)
+is_fixed_price: bool = pricing_model_key == "fixed"
+
+st.markdown("---")
 
 # ---------------------------------------------------------------------------
 # Предусловия: без Setup страница не считается
@@ -205,15 +252,27 @@ else:
         c1.write(f"**{stage['name']}**")
         c2.write(f"{executor} ({member['role']})")
         c3.write(f"{stage['hours']:.1f} ч")
-        c4.write(f"{member['billing_rate'] * stage['hours']:,.0f} {currency_symbol}")
+        # В фикс-прайс модели billing_rate не участвует в расчёте — показываем
+        # себестоимость часа сотрудника, чтобы пользователь видел, из чего
+        # будут складываться издержки этапа.
+        if is_fixed_price:
+            c4.write(f"{member['cost_rate'] * stage['hours']:,.0f} {currency_symbol}")
+        else:
+            c4.write(f"{member['billing_rate'] * stage['hours']:,.0f} {currency_symbol}")
         if c5.button("🗑", key=f"del_stage_{idx}", help="Удалить этап"):
             st.session_state["project_stages"].pop(idx)
             st.rerun()
 
-    st.caption(
-        "Колонки: Этап · Исполнитель · Часы · Выручка по этапу "
-        f"({currency_symbol} = billing × hours)"
-    )
+    if is_fixed_price:
+        st.caption(
+            "Колонки: Этап · Исполнитель · Часы · Себестоимость этапа "
+            f"({currency_symbol} = cost_rate × hours)"
+        )
+    else:
+        st.caption(
+            "Колонки: Этап · Исполнитель · Часы · Выручка по этапу "
+            f"({currency_symbol} = billing × hours)"
+        )
 
 # --- реактивный пересчёт Blended Rate и Leverage ---
 # Собираем team_with_hours одним проходом: каждой строке этапа соответствует
@@ -247,6 +306,26 @@ col_m2.metric(
     help="Часы младших / часы старших. Выше — выше маржа.",
 )
 col_m3.metric("Всего часов", f"{hours_total:.1f}")
+
+# ---------------------------------------------------------------------------
+# Слайдер целевой маржи — только для фикс-прайс модели.
+# ---------------------------------------------------------------------------
+# Хранится в session_state в ПРОЦЕНТАХ (целое 5..80), как видит пользователь;
+# в FixedPriceCalculator передаётся уже как доля 0..1 (см. блок расчёта ниже).
+# Ключ совпадает с PROFILE_KEYS, поэтому значение сохраняется в профиль.
+if is_fixed_price:
+    st.slider(
+        "Целевая маржа (%)",
+        min_value=TARGET_MARGIN_MIN_PCT,
+        max_value=TARGET_MARGIN_MAX_PCT,
+        value=TARGET_MARGIN_DEFAULT_PCT,
+        step=TARGET_MARGIN_STEP_PCT,
+        key="target_margin",
+        help=(
+            "Целевая маржа — желаемая доля прибыли от фиксированной цены "
+            "после всех издержек и налогов."
+        ),
+    )
 
 st.markdown("---")
 
@@ -421,6 +500,8 @@ calc_clicked = st.button(
 
 if calc_clicked:
     # --- 1. Менеджер расходов: накладные фирмы + расходы проекта ---
+    # Шаг идентичен для обеих моделей: ExpenseManager одинаково нужен
+    # и в gross_revenue/NNE, и в Total Costs фикс-прайса.
     billable_hours_month = float(
         st.session_state.get("billable_hours_per_month", 160.0)
     )
@@ -466,50 +547,13 @@ if calc_clicked:
         except ValueError as exc:
             st.warning(f"Пропущен произвольный расход: {exc}")
 
-    # --- 2. Финансовые показатели ---
-    gr_val = gross_revenue(team_with_hours)
-    direct_labor_val = total_direct_labor(team_with_hours)
-    total_hours_val = sum(m["hours"] for m in team_with_hours)
-
-    # Накладные аллоцируем пропорционально часам проекта:
-    #     overhead_rate = monthly_overheads / billable_hours_per_month    [валюта/час]
-    #     overheads_alloc = overhead_rate × total_hours_project            [валюта]
-    # Это классическая PSF-аллокация по фактически отработанным часам —
-    # размерности сходятся, в отличие от аллокации по сумме трудозатрат.
-    overheads_alloc = manager.get_overheads_allocated(total_hours_val)
-
-    disbursements_billed = manager.get_disbursements_billed()
-    disbursements_own = manager.get_disbursements_own()
-
-    # --- 3. Налог через TaxCalculator ---
-    tax_calc = TaxCalculator(tax_params)
-    tax_result = tax_calc.calculate_tax(
-        revenue=gr_val + disbursements_billed,
-        params={
-            **tax_params,
-            "expenses": direct_labor_val + overheads_alloc + disbursements_own,
-            "disbursements_billed": disbursements_billed,
-        },
-    )
-    tax_total = float(tax_result["total_tax"])
-
-    # --- 4. NNE ---
-    nne_val = nne(
-        gross=gr_val,
-        direct_labor=direct_labor_val,
-        overheads_alloc=overheads_alloc,
-        disbursements_own=disbursements_own,
-        tax=tax_total,
-    )
-
-    # --- 5. Сохраняем результат ---
-    # В results.project_expenses складываем все расходы проекта (пошлины +
-    # произвольные) в сериализованном виде — чтобы дашборд мог построить
-    # табличку «Расходы проекта» без повторного обхода session_state.
+    # --- 2. Общие сериализуемые поля результата ---
     project_expenses_dump = [e.to_dict() for e in manager.project_expenses]
     overhead_rate_val = manager.calculate_overhead_rate(billable_hours_month)
+    total_hours_val = sum(m["hours"] for m in team_with_hours)
 
-    results = {
+    # Базовый словарь результата — поля, общие для обеих моделей.
+    base_results: dict = {
         # идентификация проекта
         "project_name": project_name,
         "client": project_client,
@@ -519,28 +563,140 @@ if calc_clicked:
         "jurisdiction_mode": jurisdiction,
         "currency": calc_symbol,
         "currency_code": calc_code,
-        "regime_label": tax_result["regime_label"],
         # показатели команды
         "blended_rate": br_current,
         "leverage": lev_current,
         "total_hours": total_hours_val,
         "overhead_rate": overhead_rate_val,
-        # финансы
-        "gross_revenue": gr_val,
-        "direct_labor": direct_labor_val,
-        "overheads_alloc": overheads_alloc,
-        "disbursements": disbursements_billed,
-        "disbursements_own": disbursements_own,
-        "income_tax": float(tax_result["income_tax"]),
-        "vat": float(tax_result["vat"]),
-        "tax": tax_total,
-        "taxable_base": float(tax_result["taxable_base"]),
-        "nne": nne_val,
-        "total_client": gr_val + disbursements_billed,
         # детализация для дашборда
         "team_with_hours": team_with_hours,
         "project_expenses": project_expenses_dump,
     }
+
+    # --- 3. Расчёт по выбранной модели -----------------------------------
+    if is_fixed_price:
+        # Собираем team_stages в формате FixedPriceCalculator: один
+        # ProjectStage = один словарь с name + assigned_members.
+        # Каждой роли в стадии достаётся часовой объём этого этапа.
+        team_stages_for_fp: list[dict] = []
+        for stage in stages_data:
+            member = team_by_name.get(stage["executor"])
+            if member is None:
+                continue
+            team_stages_for_fp.append(
+                {
+                    "name": stage["name"],
+                    "assigned_members": [
+                        {
+                            "name": member["name"],
+                            "role": member["role"],
+                            "billing_rate": float(member["billing_rate"]),
+                            "cost_rate": float(member["cost_rate"]),
+                            "hours": float(stage["hours"]),
+                        }
+                    ],
+                }
+            )
+
+        # Слайдер хранит проценты — переводим в долю.
+        target_margin_pct = int(
+            st.session_state.get("target_margin", TARGET_MARGIN_DEFAULT_PCT)
+        )
+        target_margin_decimal = target_margin_pct / 100.0
+
+        fp_calc = FixedPriceCalculator()
+        try:
+            fp_result = fp_calc.calculate(
+                team_stages=team_stages_for_fp,
+                expense_manager=manager,
+                jurisdiction_params=tax_params,
+                target_margin=target_margin_decimal,
+            )
+        except ValueError as exc:
+            st.error(f"Не удалось рассчитать фиксированную цену: {exc}")
+            st.stop()
+
+        stage_flags = fp_calc.get_stage_flags(
+            stages=team_stages_for_fp,
+            fixed_price=fp_result["fixed_price"],
+            target_margin=target_margin_decimal,
+        )
+
+        # Подпись режима для шапки дашборда — берём из TaxCalculator
+        # на номинальной цене (нужен только regime_label).
+        regime_label = TaxCalculator(tax_params).calculate_tax(
+            revenue=fp_result["fixed_price"],
+            params={**tax_params, "expenses": fp_result["total_costs"]},
+        )["regime_label"]
+
+        results = {
+            **base_results,
+            "pricing_model": "fixed",
+            "regime_label": regime_label,
+            # фикс-прайс показатели
+            "fixed_price": float(fp_result["fixed_price"]),
+            "total_costs": float(fp_result["total_costs"]),
+            "direct_labor": float(fp_result["direct_labor"]),
+            "overheads_alloc": float(fp_result["overheads_alloc"]),
+            "disbursements_own": float(fp_result["disbursements_own"]),
+            "tax": float(fp_result["tax_amount"]),
+            "nne": float(fp_result["nne"]),
+            "actual_margin": float(fp_result["actual_margin"]),
+            "target_margin": target_margin_decimal,
+            "stage_flags": stage_flags,
+            # для совместимости с экспортом / навигацией
+            "disbursements": manager.get_disbursements_billed(),
+        }
+    else:
+        # --- Биллинговая модель: поведение v0.2 ---
+        gr_val = gross_revenue(team_with_hours)
+        direct_labor_val = total_direct_labor(team_with_hours)
+
+        # Накладные аллоцируем пропорционально часам проекта:
+        #   overhead_rate   = monthly_overheads / billable_hours_per_month
+        #   overheads_alloc = overhead_rate × total_hours_project
+        overheads_alloc = manager.get_overheads_allocated(total_hours_val)
+
+        disbursements_billed = manager.get_disbursements_billed()
+        disbursements_own = manager.get_disbursements_own()
+
+        tax_calc = TaxCalculator(tax_params)
+        tax_result = tax_calc.calculate_tax(
+            revenue=gr_val + disbursements_billed,
+            params={
+                **tax_params,
+                "expenses": direct_labor_val + overheads_alloc + disbursements_own,
+                "disbursements_billed": disbursements_billed,
+            },
+        )
+        tax_total = float(tax_result["total_tax"])
+
+        nne_val = nne(
+            gross=gr_val,
+            direct_labor=direct_labor_val,
+            overheads_alloc=overheads_alloc,
+            disbursements_own=disbursements_own,
+            tax=tax_total,
+        )
+
+        results = {
+            **base_results,
+            "pricing_model": "billing",
+            "regime_label": tax_result["regime_label"],
+            # финансы
+            "gross_revenue": gr_val,
+            "direct_labor": direct_labor_val,
+            "overheads_alloc": overheads_alloc,
+            "disbursements": disbursements_billed,
+            "disbursements_own": disbursements_own,
+            "income_tax": float(tax_result["income_tax"]),
+            "vat": float(tax_result["vat"]),
+            "tax": tax_total,
+            "taxable_base": float(tax_result["taxable_base"]),
+            "nne": nne_val,
+            "total_client": gr_val + disbursements_billed,
+        }
+
     st.session_state["results"] = results
     # Обратная совместимость: старый ключ также обновляем,
     # чтобы 03_Dashboard работал без изменений на старых сессиях.
@@ -555,24 +711,50 @@ if results_current:
     st.markdown("### Предварительный результат")
 
     sym = results_current["currency"]
-    p1, p2, p3 = st.columns(3)
-    p1.metric(f"Выручка, {sym}", f"{results_current['gross_revenue']:,.0f}")
-    p2.metric(f"Налог, {sym}", f"{results_current['tax']:,.0f}")
-    p3.metric(
-        f"Чистая прибыль (NNE), {sym}",
-        f"{results_current['nne']:,.0f}",
-        delta=(
-            f"{(results_current['nne'] / results_current['gross_revenue'] * 100):.1f}%"
-            if results_current["gross_revenue"]
-            else None
-        ),
-    )
+    result_model = results_current.get("pricing_model", "billing")
 
-    st.caption(
-        f"Режим: {results_current['regime_label']} · "
-        f"Пошлины (транзит): {results_current['disbursements']:,.0f} {sym} · "
-        f"Собственные расходы: {results_current['disbursements_own']:,.0f} {sym}"
-    )
+    if result_model == "fixed":
+        # Фикс-прайс preview: цена / NNE / реальная маржа.
+        p1, p2, p3 = st.columns(3)
+        p1.metric(
+            f"Фиксированная цена, {sym}",
+            f"{results_current['fixed_price']:,.0f}",
+        )
+        p2.metric(
+            f"Чистая прибыль (NNE), {sym}",
+            f"{results_current['nne']:,.0f}",
+        )
+        p3.metric(
+            "Реальная маржа",
+            f"{results_current['actual_margin'] * 100:.1f}%",
+            delta=(
+                f"цель {results_current['target_margin'] * 100:.0f}%"
+            ),
+        )
+        st.caption(
+            f"Режим: {results_current['regime_label']} · "
+            f"Все издержки: {results_current['total_costs']:,.0f} {sym} · "
+            f"Налог: {results_current['tax']:,.0f} {sym}"
+        )
+    else:
+        # Биллинговая preview (как в v0.2): выручка / налог / NNE.
+        p1, p2, p3 = st.columns(3)
+        p1.metric(f"Выручка, {sym}", f"{results_current['gross_revenue']:,.0f}")
+        p2.metric(f"Налог, {sym}", f"{results_current['tax']:,.0f}")
+        p3.metric(
+            f"Чистая прибыль (NNE), {sym}",
+            f"{results_current['nne']:,.0f}",
+            delta=(
+                f"{(results_current['nne'] / results_current['gross_revenue'] * 100):.1f}%"
+                if results_current["gross_revenue"]
+                else None
+            ),
+        )
+        st.caption(
+            f"Режим: {results_current['regime_label']} · "
+            f"Пошлины (транзит): {results_current['disbursements']:,.0f} {sym} · "
+            f"Собственные расходы: {results_current['disbursements_own']:,.0f} {sym}"
+        )
 
     # Кнопка-подсказка. Сам переход возможен через sidebar Streamlit,
     # поэтому кнопка здесь — навигационная подсказка.
@@ -585,15 +767,17 @@ if results_current:
     with st.expander("Детали расчёта"):
         rows = []
         for m in results_current["team_with_hours"]:
-            rows.append(
-                {
-                    "Сотрудник": m["name"],
-                    "Роль": m["role"],
-                    "Часы": m["hours"],
-                    f"Выручка, {sym}": m["billing_rate"] * m["hours"],
-                    f"Себестоимость, {sym}": m["cost_rate"] * m["hours"],
-                }
-            )
+            row = {
+                "Сотрудник": m["name"],
+                "Роль": m["role"],
+                "Часы": m["hours"],
+                f"Себестоимость, {sym}": m["cost_rate"] * m["hours"],
+            }
+            # Колонку выручки показываем только в биллинг-модели —
+            # в фикс-прайсе billing_rate не используется.
+            if result_model != "fixed":
+                row[f"Выручка, {sym}"] = m["billing_rate"] * m["hours"]
+            rows.append(row)
         st.dataframe(
             pd.DataFrame(rows),
             width='stretch',

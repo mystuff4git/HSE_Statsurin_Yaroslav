@@ -1,22 +1,31 @@
 """
-Rentab v0.2 — страница 03: Дашборд (итерация 4).
+Rentab v0.3 — страница 03: Дашборд.
 
 Страница рассчитана на показ уже сформированной на «Проекте» сметы
-(st.session_state["results"]) и состоит из пяти блоков:
+(st.session_state["results"]). Структура зависит от выбранной модели
+ценообразования:
 
-1. Карточки верхнего уровня — выручка, перевыставляемые расходы (если есть),
-   итоговый счёт клиенту, чистая прибыль (NNE) с маржой.
-2. Структура цены (plotly pie) + вспомогательные метрики справа.
-3. Таблица по этапам с итоговой строкой.
-4. Таблица расходов проекта (показывается только если есть).
-5. Индикатор рентабельности (success / warning / error) + выгрузка в CSV.
+— pricing_model == "billing" (поведение v0.2):
+    1. Карточки верхнего уровня — выручка, перевыставляемые расходы,
+       итоговый счёт клиенту, чистая прибыль (NNE) с маржой.
+    2. Структура цены (plotly pie) + вспомогательные метрики справа.
+    3. Таблица по этапам с итоговой строкой.
+    4. Таблица расходов проекта (показывается только если есть).
+    5. Индикатор рентабельности + выгрузка в Excel.
+
+— pricing_model == "fixed" (v0.3):
+    1. Карточки: все издержки / целевая маржа / фикс. цена / NNE+реальная маржа.
+    2. Горизонтальный stacked bar — из чего складывается цена клиенту:
+       Прямые трудозатраты | Накладные | Налог | Прибыль.
+    3. Таблица «Анализ этапов» со светофором (green / yellow / red).
+    4. Индикатор рентабельности.
 
 Для юрисдикции «Оба» доступна конвертация валюты в сайдбаре: пользователь
 вводит курс RUB/KZT и выбирает целевую валюту — все суммы пересчитываются.
 
 Все строки интерфейса переведены на русский. Ключи результата (gross_revenue,
-direct_labor и т.п.) остаются английскими — они внутренние, часть API
-между страницами.
+direct_labor, fixed_price и т.п.) остаются английскими — они внутренние,
+часть API между страницами.
 """
 
 from __future__ import annotations
@@ -29,6 +38,24 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from modules.jurisdiction import CURRENCY_CODES, CURRENCY_SYMBOLS
+
+
+# ---------------------------------------------------------------------------
+# Подписи статусов этапов (для фикс-прайс анализа).
+# Используются в колонке «Статус» таблицы анализа этапов.
+# ---------------------------------------------------------------------------
+STAGE_FLAG_LABELS: dict[str, str] = {
+    "green":  "🟢 Норма",
+    "yellow": "🟡 Низкая маржа",
+    "red":    "🔴 Убыточный",
+}
+
+# Цвета фоновой подсветки строк по флагу. Пустая строка означает «без подсветки».
+STAGE_FLAG_BG_COLORS: dict[str, str] = {
+    "green":  "",
+    "yellow": "background-color: #fef3c7",   # пастельно-жёлтый
+    "red":    "background-color: #fee2e2",   # пастельно-красный
+}
 
 
 # ---------------------------------------------------------------------------
@@ -136,8 +163,147 @@ if r.get("regime_label"):
 if meta_parts:
     st.caption("  ·  ".join(meta_parts))
 
+# ===========================================================================
+# Ветка для фикс-прайс модели — рендерит свой набор блоков и завершает
+# выполнение скрипта через st.stop(). Биллинговая ветка ниже остаётся
+# нетронутой и идентична v0.2.
+# ===========================================================================
+if r.get("pricing_model") == "fixed":
+    # ---------- 1. Карточки верхнего уровня (4 шт.) -------------------- #
+    direct_labor_x = cx(r["direct_labor"])
+    overheads_alloc_x = cx(r["overheads_alloc"])
+    disbursements_own_x = cx(r["disbursements_own"])
+    tax_x = cx(r["tax"])
+    fixed_price_x = cx(r["fixed_price"])
+    total_costs_x = cx(r["total_costs"])
+    nne_fp_x = cx(r["nne"])
+    target_margin_pct = float(r.get("target_margin", 0.0)) * 100.0
+    actual_margin_pct = float(r.get("actual_margin", 0.0)) * 100.0
+
+    fp_c1, fp_c2, fp_c3, fp_c4 = st.columns(4)
+    fp_c1.metric(f"Все издержки проекта, {sym}", f"{total_costs_x:,.0f}")
+    fp_c2.metric("Целевая маржа", f"{target_margin_pct:.0f}%")
+    fp_c3.metric(f"Фиксированная цена, {sym}", f"{fixed_price_x:,.0f}")
+    fp_c4.metric(
+        f"Чистая прибыль (NNE), {sym}",
+        f"{nne_fp_x:,.0f}",
+        delta=f"{actual_margin_pct:.1f}% реальная маржа",
+    )
+
+    st.markdown("---")
+
+    # ---------- 2. Горизонтальный stacked bar — структура цены --------- #
+    # Слои: Прямые трудозатраты | Накладные | Налог | Прибыль.
+    # disbursements_own (если есть) включаем в «Накладные», чтобы получить
+    # ровно четыре слоя как требует методика ВКР; сумма всех слоёв равна
+    # fixed_price точно (Total Costs + Tax + NNE = Fixed Price).
+    st.markdown("#### Структура фиксированной цены")
+
+    indirect_x = overheads_alloc_x + disbursements_own_x
+
+    bar_layers: list[tuple[str, float, str]] = [
+        ("Прямые трудозатраты", direct_labor_x, "#3498db"),
+        ("Накладные",           indirect_x,     "#9b59b6"),
+        ("Налог",               tax_x,          "#e74c3c"),
+        ("Прибыль",             nne_fp_x,       "#2ecc71"),
+    ]
+
+    fig_fp = go.Figure()
+    for layer_name, layer_value, layer_color in bar_layers:
+        fig_fp.add_trace(
+            go.Bar(
+                x=[layer_value],
+                y=["Фикс. цена"],
+                name=layer_name,
+                orientation="h",
+                marker=dict(color=layer_color),
+                hovertemplate=(
+                    f"<b>{layer_name}</b>: %{{x:,.0f}} {sym}<extra></extra>"
+                ),
+            )
+        )
+    fig_fp.update_layout(
+        barmode="stack",
+        height=200,
+        margin=dict(t=10, b=10, l=10, r=10),
+        legend=dict(orientation="h", yanchor="top", y=-0.3),
+        xaxis=dict(title=f"Сумма, {sym}", tickformat=",.0f"),
+        yaxis=dict(showticklabels=False),
+    )
+    st.plotly_chart(fig_fp, width='stretch')
+
+    st.caption(f"Налоговый режим: {r.get('regime_label', '—')}")
+
+    st.markdown("---")
+
+    # ---------- 3. Таблица «Анализ этапов» с светофором ---------------- #
+    st.markdown("#### Анализ этапов")
+
+    # Часы по этапам соберём из team_with_hours, группируя по stage_name.
+    # FixedPriceCalculator.get_stage_flags не возвращает часы, чтобы остаться
+    # в рамках спецификации, поэтому считаем здесь — единый источник часов
+    # лежит в team_with_hours (его страница «Проект» собирает всегда).
+    hours_by_stage: dict[str, float] = {}
+    for member_row in r.get("team_with_hours", []):
+        stage_label = str(member_row.get("stage_name", ""))
+        hours_by_stage[stage_label] = (
+            hours_by_stage.get(stage_label, 0.0)
+            + float(member_row.get("hours", 0.0))
+        )
+
+    flag_rows: list[dict] = []
+    for stage_flag in r.get("stage_flags", []):
+        stage_label = str(stage_flag.get("stage_name", "—"))
+        flag_value = str(stage_flag.get("flag", "green"))
+        flag_rows.append(
+            {
+                "Этап": stage_label,
+                "Часы": f"{hours_by_stage.get(stage_label, 0.0):,.1f}",
+                f"Издержки этапа, {sym}": f"{cx(stage_flag.get('stage_costs', 0.0)):,.0f}",
+                f"Доля выручки, {sym}": f"{cx(stage_flag.get('stage_revenue_share', 0.0)):,.0f}",
+                "Маржа, %": f"{float(stage_flag.get('stage_margin', 0.0)) * 100:.1f}",
+                "Статус": STAGE_FLAG_LABELS.get(flag_value, flag_value),
+                # Служебная колонка для подсветки строк — скрываем при выводе.
+                "_flag": flag_value,
+            }
+        )
+
+    if flag_rows:
+        flag_df = pd.DataFrame(flag_rows)
+
+        def _color_by_flag(row: pd.Series) -> list[str]:
+            """Подсвечивает строку фоном по значению служебной колонки _flag."""
+            bg_style = STAGE_FLAG_BG_COLORS.get(row.get("_flag", ""), "")
+            return [bg_style for _ in row]
+
+        styled_flags = flag_df.style.apply(_color_by_flag, axis=1)
+        # Скрываем служебный _flag — он нужен только для подсветки.
+        styled_flags = styled_flags.hide(subset=["_flag"], axis="columns")
+        st.dataframe(styled_flags, width='stretch', hide_index=True)
+    else:
+        st.info("Нет этапов для анализа.")
+
+    st.markdown("---")
+
+    # ---------- 4. Индикатор рентабельности ---------------------------- #
+    nne_raw_fp = float(r["nne"])
+    if nne_raw_fp > 0:
+        st.success("✅ Проект рентабелен")
+    elif nne_raw_fp == 0:
+        st.warning("⚠️ Проект в точке безубыточности")
+    else:
+        st.error(
+            "❌ Проект убыточен — пересмотрите целевую маржу или часы по этапам."
+        )
+
+    # Завершаем рендер дашборда: дальше идёт billing-ветка v0.2,
+    # которая обращается к gross_revenue и т.п. — для фикс-прайса этих
+    # ключей нет, поэтому останавливаемся.
+    st.stop()
+
+
 # ---------------------------------------------------------------------------
-# Блок 1 — Карточки верхнего уровня
+# Блок 1 — Карточки верхнего уровня (биллинговая модель)
 # ---------------------------------------------------------------------------
 gross = cx(r["gross_revenue"])
 disb_b = cx(r["disbursements"])
