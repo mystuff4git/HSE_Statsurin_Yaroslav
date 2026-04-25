@@ -128,14 +128,14 @@ st.markdown("---")
 team: list[dict] = st.session_state.get("team", [])
 if not team:
     st.warning(
-        "Сначала заполните состав команды на странице **01 Setup → Команда**."
+        "Сначала заполните состав команды на странице **01 Настройка → Команда**."
     )
     st.stop()
 
 jurisdiction_params: dict | None = st.session_state.get("jurisdiction_params")
 if not jurisdiction_params:
     st.warning(
-        "Сначала выберите юрисдикцию на странице **01 Setup → Юрисдикция и налоги**."
+        "Сначала выберите юрисдикцию на странице **01 Настройка → Юрисдикция и налоги**."
     )
     st.stop()
 
@@ -199,7 +199,7 @@ with st.form("add_stage_form", clear_on_submit=True):
         stage_executor = st.selectbox(
             "Исполнитель",
             options=team_names,
-            help="Выбирается из состава команды, заданного на странице Setup.",
+            help="Выбирается из состава команды, заданного на странице Настройка.",
         )
     with col_hours:
         stage_hours = st.number_input(
@@ -807,7 +807,7 @@ if results_current:
     # Кнопка-подсказка. Сам переход возможен через sidebar Streamlit,
     # поэтому кнопка здесь — навигационная подсказка.
     st.page_link(
-        "pages/03_Dashboard.py",
+        "pages/03_Дашборд.py",
         label="📊 Перейти к дашборду",
         icon="➡️",
     )
