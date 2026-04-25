@@ -30,13 +30,13 @@ direct_labor, fixed_price и т.п.) остаются английскими —
 
 from __future__ import annotations
 
-import io
 from datetime import date
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from modules.estimate_export import generate_estimate_xlsx
 from modules.jurisdiction import CURRENCY_CODES, CURRENCY_SYMBOLS
 
 
@@ -67,6 +67,43 @@ EXPENSE_CATEGORY_LABELS: dict[str, str] = {
     "disbursement_own": "За счёт фирмы",
     "project_extra": "Прочие проектные расходы",
 }
+
+
+# ---------------------------------------------------------------------------
+# Хелпер: блок «Скачать смету проекта»
+# ---------------------------------------------------------------------------
+def _render_estimate_download(results: dict) -> None:
+    """Рендерит поле «Название фирмы» и кнопку скачивания .xlsx-сметы.
+
+    Используется в обеих ветках дашборда (billing и fixed) — чтобы не
+    дублировать код. Имя фирмы хранится в session_state["firm_name"]
+    и подставляется в шапку документа.
+    """
+    st.markdown("#### Экспорт сметы")
+    firm_name = st.text_input(
+        "Название фирмы (для шапки документа)",
+        value=str(st.session_state.get("firm_name", "")),
+        key="firm_name",
+        placeholder="Например, ООО «Юридическая фирма»",
+    )
+    try:
+        xlsx_bytes = generate_estimate_xlsx(results, firm_name=firm_name)
+    except ImportError as exc:
+        # openpyxl может отсутствовать в окружении — мягко деградируем.
+        st.warning(
+            f"Экспорт в Excel недоступен: не установлен openpyxl ({exc}). "
+            "Добавьте его в requirements.txt и перезапустите приложение."
+        )
+        return
+    project_title = (results.get("project_name") or "project").strip() or "project"
+    file_name = f"Смета_{project_title}_{date.today().isoformat()}.xlsx"
+    st.download_button(
+        label="📄 Скачать смету проекта",
+        data=xlsx_bytes,
+        file_name=file_name,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        width='content',
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +332,9 @@ if r.get("pricing_model") == "fixed":
         st.error(
             "❌ Проект убыточен — пересмотрите целевую маржу или часы по этапам."
         )
+
+    # ---------- 5. Экспорт сметы (XLSX) -------------------------------- #
+    _render_estimate_download(r)
 
     # Завершаем рендер дашборда: дальше идёт billing-ветка v0.2,
     # которая обращается к gross_revenue и т.п. — для фикс-прайса этих
@@ -529,93 +569,6 @@ else:
     st.error("❌ Проект убыточен — пересмотрите ставки или состав команды")
 
 
-# --- Скачать смету (XLSX) ---
-# Формируем .xlsx через pandas + openpyxl. Два листа:
-#  1) «Смета по этапам» — заголовок с названием проекта и датой + таблица этапов
-#     + последняя строка «Итого» жирным.
-#  2) «Финансовые показатели» — плоский список «показатель: значение».
-# Весь файл собирается в памяти (BytesIO), чтобы отдать st.download_button.
-def _build_xlsx_report() -> bytes:
-    """Собирает xlsx-отчёт по текущей смете и возвращает его как bytes.
-
-    Логика вынесена в функцию, чтобы не засорять основной поток рендера
-    и чтобы её можно было при желании вызвать в тесте.
-    """
-    output = io.BytesIO()
-    today_str = date.today().isoformat()
-    project_title = (r.get("project_name") or "project").strip() or "project"
-
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        # --- Лист 1: Смета по этапам ---
-        sheet1 = "Смета по этапам"
-        if stages_df.empty:
-            # Пустой DataFrame всё равно нужно записать, чтобы лист существовал.
-            pd.DataFrame([{"Примечание": "В смете нет этапов"}]).to_excel(
-                writer, sheet_name=sheet1, index=False
-            )
-        else:
-            # Шапка: строка 1 — заголовок (4 ячейки объединим), строка 2 — пустая,
-            # со строки 3 — таблица. startrow=2 пишет начиная с excel-row 3.
-            stages_df.to_excel(writer, sheet_name=sheet1, index=False, startrow=2)
-
-            ws = writer.sheets[sheet1]
-            # Объединяем ячейки A1:F1 (шесть столбцов таблицы) и ставим заголовок.
-            n_cols = len(stages_df.columns)
-            end_col_letter = ws.cell(row=1, column=n_cols).column_letter
-            ws.merge_cells(f"A1:{end_col_letter}1")
-            header_cell = ws["A1"]
-            header_cell.value = f"{project_title} — смета от {today_str}"
-            # Жирный заголовок (openpyxl.styles.Font импортируем лениво).
-            from openpyxl.styles import Font
-
-            header_cell.font = Font(bold=True, size=12)
-
-            # Жирная последняя строка (итоги): учитываем startrow=2 и шапку
-            # таблицы → Excel-строка = 3 (шапка) + len(stages_df) (данные) = total.
-            total_row_excel = 3 + len(stages_df)
-            for col_idx in range(1, n_cols + 1):
-                ws.cell(row=total_row_excel, column=col_idx).font = Font(bold=True)
-
-        # --- Лист 2: Финансовые показатели ---
-        sheet2 = "Финансовые показатели"
-        currency_label = f" ({sym})"
-        # Показатели дублируют карточки дашборда, но в плоском виде.
-        margin_pct = (nne_val / gross * 100) if gross else 0.0
-        effective_tax_pct = (cx(r["tax"]) / cx(r["gross_revenue"]) * 100) if r["gross_revenue"] else 0.0
-
-        fin_rows = [
-            {"Показатель": "Выручка (без перевыставляемых)" + currency_label, "Значение": f"{gross:,.0f}"},
-            {"Показатель": "Перевыставляемые расходы" + currency_label, "Значение": f"{disb_b:,.0f}"},
-            {"Показатель": "Итоговый счёт клиенту" + currency_label, "Значение": f"{total_client:,.0f}"},
-            {"Показатель": "Прямые трудозатраты" + currency_label, "Значение": f"{cx(r['direct_labor']):,.0f}"},
-            {"Показатель": "Накладные (распределённые)" + currency_label, "Значение": f"{cx(r['overheads_alloc']):,.0f}"},
-            {"Показатель": "Расходы за счёт фирмы" + currency_label, "Значение": f"{cx(r['disbursements_own']):,.0f}"},
-            {"Показатель": "Налог" + currency_label, "Значение": f"{cx(r['tax']):,.0f}"},
-            {"Показатель": "Чистая прибыль (NNE)" + currency_label, "Значение": f"{nne_val:,.0f}"},
-            {"Показатель": "Маржа, %", "Значение": f"{margin_pct:.1f}"},
-            {"Показатель": f"Средневзвешенная ставка ({sym}/ч)", "Значение": f"{cx(r['blended_rate']):,.0f}"},
-            {"Показатель": "Коэффициент рычага", "Значение": f"{r['leverage']:.2f}"},
-            {"Показатель": "Эффективная ставка налога, %", "Значение": f"{effective_tax_pct:.1f}"},
-            {"Показатель": "Налоговый режим", "Значение": r.get("regime_label", "—")},
-        ]
-        pd.DataFrame(fin_rows).to_excel(writer, sheet_name=sheet2, index=False)
-
-    return output.getvalue()
-
-
-try:
-    xlsx_bytes = _build_xlsx_report()
-    file_name = f"Rentab_смета_{(r.get('project_name') or 'project').strip() or 'project'}_{date.today().isoformat()}.xlsx"
-    st.download_button(
-        label="📥 Скачать смету (Excel)",
-        data=xlsx_bytes,
-        file_name=file_name,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        width='content',
-    )
-except ImportError as exc:
-    # openpyxl может отсутствовать в окружении — мягко деградируем.
-    st.warning(
-        f"Экспорт в Excel недоступен: не установлен openpyxl ({exc}). "
-        "Добавьте его в requirements.txt и перезапустите приложение."
-    )
+# --- Скачать смету проекта ---
+# Логика формирования файла вынесена в modules/estimate_export.py.
+_render_estimate_download(r)
