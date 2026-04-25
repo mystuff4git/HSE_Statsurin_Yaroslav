@@ -124,6 +124,53 @@ CURRENCY_CODES: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
+# Извлечение ставки взносов работодателя из jurisdiction_params.
+# Используется в карточке сотрудника на 01_Setup для дефолтного значения
+# поля «Страховые взносы работодателя».
+# ---------------------------------------------------------------------------
+def get_employer_contribution_rate(jurisdiction_params: dict | None) -> float:
+    """Возвращает суммарную ставку взносов работодателя из настроек юрисдикции.
+
+    Логика:
+      - РФ + УСН/ОСНО — берём по ключу social_contributions из
+        TAX_RATES_RF_2026["SOCIAL_CONTRIBUTIONS"] (standard / zero).
+      - РФ + АУСН — фиксированный 0% (по конструкции режима).
+      - РФ + НПД — самозанятость, работодателя нет → 0%.
+      - РК — сумма ставок PAYROLL_EMPLOYER (ООСМС + СО + ОПВР).
+      - Режим «Оба» (jurisdiction == "Both") — берём РФ как основную.
+      - Если ничего не определено — возвращаем стандартный РФ-тариф 0.30.
+
+    Args:
+        jurisdiction_params: Словарь, лежащий в session_state["jurisdiction_params"]
+            (см. формат в pages/01_Setup.py). Может быть None — тогда
+            используем стандартный тариф РФ.
+
+    Returns:
+        Доля от 0 до 1 — суммарная ставка взносов с ФОТ.
+    """
+    if not jurisdiction_params:
+        return TAX_RATES_RF_2026["SOCIAL_CONTRIBUTIONS"]["standard"]
+
+    jur = jurisdiction_params.get("jurisdiction", "RF")
+
+    # Режим «Оба» сводим к РФ — у юриста-резидента работодатель один.
+    if jur in ("RF", "Both"):
+        rf = jurisdiction_params.get("rf") or {}
+        regime = rf.get("regime", "USN")
+        if regime == "AUSN":
+            return float(TAX_RATES_RF_2026["AUSN"]["insurance_contributions"])
+        if regime == "NPD":
+            return 0.0
+        sc_key = rf.get("social_contributions", "standard")
+        return float(TAX_RATES_RF_2026["SOCIAL_CONTRIBUTIONS"].get(sc_key, 0.30))
+
+    if jur == "KZ":
+        return float(sum(TAX_RATES_KZ_2026["PAYROLL_EMPLOYER"].values()))
+
+    return float(TAX_RATES_RF_2026["SOCIAL_CONTRIBUTIONS"]["standard"])
+
+
+# ---------------------------------------------------------------------------
 # Пресеты режимов — готовые конфигурации для селектора в UI
 # ---------------------------------------------------------------------------
 # Каждый пресет — словарь с ключами:

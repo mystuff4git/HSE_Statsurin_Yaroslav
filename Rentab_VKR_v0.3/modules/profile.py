@@ -30,6 +30,7 @@ PROFILE_KEYS: tuple[str, ...] = (
     "team",
     "firm_expenses",
     "billable_hours_per_month",
+    "contract_hours_total",
     "exchange_rate_rub_per_kzt",
     "pricing_model",
     "target_margin",

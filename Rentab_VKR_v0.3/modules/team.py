@@ -139,6 +139,81 @@ def team_from_editor(df: pd.DataFrame) -> list[dict]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Калькулятор ФОТ — расчёт стоимости сотрудника и его часа.
+# ---------------------------------------------------------------------------
+# Стандартная норма часов в месяц по договору. Дефолт 168 ч ≈ 8 ч × 21
+# рабочих дня; используется как value по умолчанию в UI карточки сотрудника.
+DEFAULT_CONTRACT_HOURS_PER_MONTH: float = 168.0
+
+
+def calculate_employee_full_cost(
+    gross_salary: float,
+    contract_hours_per_month: float,
+    employer_contribution_rate: float,
+) -> dict:
+    """Рассчитывает полную стоимость сотрудника и стоимость его часа.
+
+    Используется на странице 01_Setup → «Команда» в карточке добавления
+    сотрудника, чтобы пользователь не подбирал cost_rate «на глаз»: задаёт
+    оклад, контрактные часы и ставку взносов работодателя — получает
+    рекомендуемую стоимость часа (полную нагрузку на ФОТ).
+
+    Формула:
+        employer_taxes     = gross_salary * employer_contribution_rate
+        total_monthly_cost = gross_salary + employer_taxes
+        cost_rate_per_hour = total_monthly_cost / contract_hours_per_month
+
+    Args:
+        gross_salary: Оклад до вычетов (валюта проекта, в месяц).
+        contract_hours_per_month: Сколько часов сотрудник должен работать
+            по договору в месяц. Должно быть > 0.
+        employer_contribution_rate: Доля взносов работодателя (например,
+            0.30 для стандартного тарифа РФ). Должна быть >= 0.
+
+    Returns:
+        Словарь с ключами:
+          - gross_salary       (float) — оклад на входе;
+          - employer_taxes     (float) — gross × rate;
+          - total_monthly_cost (float) — gross + employer_taxes;
+          - cost_rate_per_hour (float) — total_monthly_cost / часы по договору.
+
+    Raises:
+        ValueError: Если contract_hours_per_month <= 0 либо
+            employer_contribution_rate < 0 либо gross_salary < 0.
+
+    Example:
+        >>> r = calculate_employee_full_cost(200_000, 168, 0.30)
+        >>> round(r["cost_rate_per_hour"], 2)
+        1547.62
+    """
+    if gross_salary < 0:
+        raise ValueError(
+            f"gross_salary не может быть отрицательным: {gross_salary}"
+        )
+    if contract_hours_per_month <= 0:
+        raise ValueError(
+            "contract_hours_per_month должно быть > 0, "
+            f"получено {contract_hours_per_month}"
+        )
+    if employer_contribution_rate < 0:
+        raise ValueError(
+            "employer_contribution_rate не может быть отрицательным: "
+            f"{employer_contribution_rate}"
+        )
+
+    employer_taxes = gross_salary * employer_contribution_rate
+    total_monthly_cost = gross_salary + employer_taxes
+    cost_rate_per_hour = total_monthly_cost / contract_hours_per_month
+
+    return {
+        "gross_salary": float(gross_salary),
+        "employer_taxes": float(employer_taxes),
+        "total_monthly_cost": float(total_monthly_cost),
+        "cost_rate_per_hour": float(cost_rate_per_hour),
+    }
+
+
 def total_direct_labor(team_with_hours: list[dict]) -> float:
     """Считает прямые трудозатраты команды по проекту.
 

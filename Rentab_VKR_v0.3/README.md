@@ -1,7 +1,7 @@
-# Rentab v0.2
+# Rentab v0.3
 
 Калькулятор стоимости и рентабельности IP-проектов в юридическом консалтинге.
-Реализует методологию PSF (Professional Services Firm, Mayster) — **Blended Rate · Leverage · NNE (Net Net Effective)** — с учётом налоговых режимов РФ и РК на 2026 год.
+Реализует методологию PSF (Professional Services Firm, Mayster) — **Blended Rate · Leverage · NNE (Net Net Effective)** — с учётом налоговых режимов РФ и РК на 2026 год. Поддерживает две модели ценообразования: биллинговую (часы × ставка) и фиксированную (цена «снизу вверх» от издержек и целевой маржи).
 
 > ВКР НИУ ВШЭ. Автор: Стацурин Ярослав. Стек: Python 3.10+ · Streamlit · Plotly · Pandas · openpyxl.
 
@@ -27,37 +27,75 @@ python -m streamlit run app.py
 
 Приложение откроется в браузере (по умолчанию `http://localhost:8501`).
 
-## Сквозной тест расчёта NNE
+## Сквозные тесты
 
 ```bash
 python test_scenario.py
 ```
 
-Прогоняет контрольный сценарий из ВКР через связку `calculator.py` + `expenses.py` + `jurisdiction.py` и сравнивает результат с ручным расчётом. Код выхода 0 — все показатели сошлись, 1 — есть расхождения.
+Прогоняет два контрольных сценария — биллинговую и фикс-прайс модели — через связку `calculator.py` + `expenses.py` + `jurisdiction.py` + `fixed_price.py` и сравнивает результаты с ручным расчётом. Код выхода 0 — все показатели сошлись, 1 — есть расхождения.
+
+---
+
+## Что нового в v0.3 относительно v0.2
+
+1. **Фиксированная модель ценообразования** (`modules/fixed_price.py`).
+   Цена считается «снизу вверх» от издержек и целевой маржи:
+   ```
+   Total Costs = Direct Labor + Overheads_alloc + Disbursements_own
+   Fixed Price = Total Costs / (1 − target_margin − effective_tax_rate)
+   ```
+   Этапы автоматически классифицируются по «светофору»:
+   - 🟢 **green** — маржа этапа ≥ целевой;
+   - 🟡 **yellow** — этап в плюс, но ниже цели;
+   - 🔴 **red** — этап убыточен (маржа ≤ 0).
+
+2. **Калькулятор ФОТ** (`calculate_employee_full_cost` в `modules/team.py`).
+   В карточке сотрудника на странице **01 Setup → Команда** теперь задаются оклад, контрактные часы и ставка взносов работодателя. Калькулятор считает полную нагрузку на ФОТ и стоимость одного часа:
+   ```
+   employer_taxes     = gross_salary × employer_contribution_rate
+   total_monthly_cost = gross_salary + employer_taxes
+   cost_rate_per_hour = total_monthly_cost / contract_hours_per_month
+   ```
+   Кнопка **«Использовать как cost_rate»** подставляет рассчитанное значение в карточку. Если cost_rate введён вручную и расходится с расчётом более чем на 20% — показывается предупреждение. В таблице команды добавлена колонка **«ФОТ ₽/ч»**.
+
+3. **Контрактные vs биллируемые часы фирмы** (страница **01 Setup → Расходы фирмы**).
+   Раньше было одно поле «оплачиваемые часы в месяц». Теперь — два:
+   - **Контрактные часы** — суммарная норма по договорам сотрудников. Кнопка «🔄 Рассчитать автоматически» суммирует из карточек команды.
+   - **Биллируемые часы** — сколько часов реально продаётся клиентам (обычно 60–75% от контрактных). Используется в знаменателе Overhead Rate.
+
+   Дополнительно показывается **Утилизация = биллируемые / контрактные**.
+
+4. **Профессиональный экспорт сметы в Excel** (`modules/estimate_export.py`).
+   Кнопка **«📄 Скачать смету проекта»** на дашборде формирует .xlsx с двумя листами: «Смета» (для клиента) и «Внутренний расчёт» (для фирмы). Форма документа зависит от модели: в биллинге — детализация по часам и ставкам, в фикс-прайсе — укрупнённые позиции без раскрытия часов.
+
+5. **Слайдер + ручной ввод целевой маржи** (страница **02 Project**). Слайдер 5–80% и поле ручного ввода 1–99% синхронизированы; для значений >80% показывается подсказка о рисках.
 
 ---
 
 ## Структура проекта
 
 ```
-Rentab_VKR_v0.2/
+Rentab_VKR_v0.3/
 ├── app.py                          # точка входа Streamlit, автозагрузка профиля фирмы
 ├── requirements.txt                # зависимости: streamlit, pandas, plotly, openpyxl
-├── test_scenario.py                # сквозной тест расчёта NNE на контрольном сценарии
+├── test_scenario.py                # сквозные тесты обеих моделей
 ├── README.md                       # этот файл
 │
 ├── pages/
-│   ├── 01_Setup.py                 # юрисдикция, налоговый режим, команда, накладные, профиль фирмы
-│   ├── 02_Project.py               # этапы проекта, исполнители, патентные пошлины, смета
-│   └── 03_Dashboard.py             # KPI, структура цены, экспорт сметы в XLSX
+│   ├── 01_Setup.py                 # юрисдикция, налоговый режим, команда + ФОТ-калькулятор, накладные, часы
+│   ├── 02_Project.py               # модель ценообразования, этапы, пошлины, целевая маржа, смета
+│   └── 03_Dashboard.py             # KPI обеих моделей, светофор по этапам, экспорт сметы XLSX
 │
 ├── modules/
 │   ├── __init__.py                 # пакет
 │   ├── calculator.py               # gross_revenue, blended_rate, leverage, nne — ядро методологии PSF
-│   ├── team.py                     # модель сотрудника, total_direct_labor
+│   ├── team.py                     # модель сотрудника, calculate_employee_full_cost, total_direct_labor
 │   ├── project.py                  # ProjectStage, загрузка каталогов пошлин, агрегация данных проекта
 │   ├── expenses.py                 # Expense, ExpenseManager, расчёт overhead rate и аллокации накладных
-│   ├── jurisdiction.py             # TAX_RATES_RF_2026, TAX_RATES_KZ_2026, REGIME_PRESETS, TaxCalculator
+│   ├── jurisdiction.py             # TAX_RATES_RF_2026, TAX_RATES_KZ_2026, TaxCalculator, get_employer_contribution_rate
+│   ├── fixed_price.py              # FixedPriceCalculator: фиксированная цена + светофор по этапам
+│   ├── estimate_export.py          # generate_estimate_xlsx: двулистовая смета (клиент + внутренний расчёт)
 │   └── profile.py                  # сохранение/загрузка/сброс профиля фирмы в data/firm_profile.json
 │
 └── data/
@@ -113,12 +151,21 @@ Rentab_VKR_v0.2/
 taxable_base = gross_revenue − disbursements_billed
 ```
 
-Ключевые показатели:
+### Биллинговая модель (без изменений с v0.2)
 
 - **Gross Revenue** — Σ(billing_rate × hours) по всем исполнителям этапа / проекта.
 - **Direct Labor** — Σ(cost_rate × hours).
 - **Blended Rate** — gross_revenue / total_hours, средний биллинговый час по команде.
 - **Leverage** — отношение часов младших к часам старших специалистов.
-- **Overhead Rate** — постоянные накладные фирмы / оплачиваемые часы в месяц.
-- **NNE (Net Net Effective)** — gross − direct_labor − overheads_alloc − disbursements_own − tax.
-  Маржа PSF считается от выручки за услуги (gross), а не от итогового счёта клиенту, т.к. пошлины — транзит и прибыли не несут.
+- **Overhead Rate** — постоянные накладные фирмы / биллируемые часы в месяц.
+- **NNE (Net Net Effective)** — gross − direct_labor − overheads_alloc − disbursements_own − tax. Маржа PSF считается от выручки за услуги (gross), а не от итогового счёта клиенту, т.к. пошлины — транзит и прибыли не несут.
+
+### Фикс-прайс модель (новая в v0.3)
+
+```
+Total Costs = Direct Labor + Overheads_alloc + Disbursements_own
+Fixed Price = Total Costs / (1 − target_margin − effective_tax_rate)
+NNE         = Fixed Price − Total Costs − Tax
+```
+
+Для режимов с налоговой базой **«доходы»** (УСН Доходы 6%, НПД, АУСН) уравнение линейно и решается за один шаг. Для режимов с базой **«прибыль»** (УСН Доходы−Расходы 15%, ОСНО, ОУР) `effective_tax_rate` зависит от самой цены, поэтому используется метод фиксированной точки (см. `_solve_fixed_price` в `modules/fixed_price.py`).

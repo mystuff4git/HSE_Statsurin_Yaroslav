@@ -308,24 +308,72 @@ col_m2.metric(
 col_m3.metric("Всего часов", f"{hours_total:.1f}")
 
 # ---------------------------------------------------------------------------
-# Слайдер целевой маржи — только для фикс-прайс модели.
+# Слайдер + ручной ввод целевой маржи — только для фикс-прайс модели.
 # ---------------------------------------------------------------------------
-# Хранится в session_state в ПРОЦЕНТАХ (целое 5..80), как видит пользователь;
-# в FixedPriceCalculator передаётся уже как доля 0..1 (см. блок расчёта ниже).
+# Хранится в session_state["target_margin"] (number_input — главный) в ПРОЦЕНТАХ
+# (целое 1..99). Слайдер — удобный shortcut в типичном диапазоне 5..80.
+# Оба виджета синхронизированы через on_change-колбэки.
 # Ключ совпадает с PROFILE_KEYS, поэтому значение сохраняется в профиль.
+
+# Верхняя граница ручного ввода — выше слайдера, чтобы можно было задать
+# нестандартно высокую маржу и получить предупреждение, если рынок может
+# не принять цену.
+TARGET_MARGIN_INPUT_MIN_PCT: int = 1
+TARGET_MARGIN_INPUT_MAX_PCT: int = 99
+
+
+def _sync_margin_from_slider() -> None:
+    """Колбэк слайдера: подтягивает значение в number_input."""
+    st.session_state["target_margin"] = int(st.session_state["margin_slider"])
+
+
+def _sync_margin_from_input() -> None:
+    """Колбэк number_input: обновляет слайдер, если значение в его диапазоне."""
+    val = int(st.session_state["target_margin"])
+    if TARGET_MARGIN_MIN_PCT <= val <= TARGET_MARGIN_MAX_PCT:
+        st.session_state["margin_slider"] = val
+
+
 if is_fixed_price:
-    st.slider(
-        "Целевая маржа (%)",
-        min_value=TARGET_MARGIN_MIN_PCT,
-        max_value=TARGET_MARGIN_MAX_PCT,
-        value=TARGET_MARGIN_DEFAULT_PCT,
-        step=TARGET_MARGIN_STEP_PCT,
-        key="target_margin",
-        help=(
-            "Целевая маржа — желаемая доля прибыли от фиксированной цены "
-            "после всех издержек и налогов."
-        ),
-    )
+    # Инициализация дефолтов до первого рендера виджетов — иначе Streamlit
+    # ругается, что значение и key-state неконсистентны.
+    st.session_state.setdefault("target_margin", TARGET_MARGIN_DEFAULT_PCT)
+    initial_slider_val = int(st.session_state["target_margin"])
+    if not (TARGET_MARGIN_MIN_PCT <= initial_slider_val <= TARGET_MARGIN_MAX_PCT):
+        initial_slider_val = TARGET_MARGIN_DEFAULT_PCT
+    st.session_state.setdefault("margin_slider", initial_slider_val)
+
+    col_slider, col_input = st.columns([3, 1])
+    with col_slider:
+        st.slider(
+            "Целевая маржа (%)",
+            min_value=TARGET_MARGIN_MIN_PCT,
+            max_value=TARGET_MARGIN_MAX_PCT,
+            step=TARGET_MARGIN_STEP_PCT,
+            key="margin_slider",
+            on_change=_sync_margin_from_slider,
+            help=(
+                "Целевая маржа — желаемая доля прибыли от фиксированной цены "
+                "после всех издержек и налогов."
+            ),
+        )
+    with col_input:
+        st.number_input(
+            "или введите",
+            min_value=TARGET_MARGIN_INPUT_MIN_PCT,
+            max_value=TARGET_MARGIN_INPUT_MAX_PCT,
+            step=TARGET_MARGIN_STEP_PCT,
+            key="target_margin",
+            on_change=_sync_margin_from_input,
+            help="Точное значение — приоритет над слайдером.",
+        )
+
+    if int(st.session_state["target_margin"]) > TARGET_MARGIN_MAX_PCT:
+        st.info(
+            "Высокая маржа. Убедитесь, что рыночная цена проекта "
+            "конкурентоспособна.",
+            icon="ℹ️",
+        )
 
 st.markdown("---")
 
