@@ -1,1 +1,17 @@
 node_modules/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Локальный профиль фирмы (содержит данные пользователя)
+Rentab_VKR_v0.3/data/firm_profile.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
